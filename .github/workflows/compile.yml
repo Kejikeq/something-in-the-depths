@@ -1,0 +1,33 @@
+name: Compile WASM
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Emscripten
+      run: |
+        git clone https://github.com/emscripten-core/emsdk.git
+        cd emsdk
+        ./emsdk install latest
+        ./emsdk activate latest
+
+    - name: Build WASM
+      run: |
+        source ./emsdk/emsdk_env.sh
+        cd c_server
+        emcc wasm_main.cpp GameState.cpp SDFEngine.cpp -o game_core.js -O3 --bind -std=c++17 -s ALLOW_MEMORY_GROWTH=1 -s MODULARIZE=1 -s EXPORT_ES6=1 -s ENVIRONMENT=web -s EXPORTED_RUNTIME_METHODS='["wasmMemory"]'
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: wasm-engine
+        path: |
+          c_server/game_core.js
+          c_server/game_core.wasm
