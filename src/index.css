@@ -1,0 +1,22 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  @keyframes loading {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(333%); }
+  }
+}
+
+body {
+  @apply bg-black text-emerald-400 font-sans overflow-hidden;
+  margin: 0;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+}
