@@ -829,7 +829,7 @@ export default function App() {
         const dxS = camPos.current.x - (-3.0);
         const dzS = camPos.current.z - 28.0;
         const distS = Math.sqrt(dxS*dxS + dzS*dzS);
-        const isNearSignNow = distS < 3.0 && camPos.current.y > 0.0;
+        const isNearSignNow = distS < 3.0 && camPos.current.y > -2.0;
         
         if (isNearSignNow !== nearSignRef.current) {
           nearSignRef.current = isNearSignNow;

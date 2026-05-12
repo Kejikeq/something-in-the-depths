@@ -3,7 +3,7 @@ export class ParticleRenderer {
     private program: WebGLProgram;
     private positionLoc: number;
     private colorLoc: number;
-    private viewProjLoc: number;
+    private viewProjLoc: WebGLUniformLocation | null;
     private vbo: WebGLBuffer;
     private MAX_PARTICLES = 2000;
     

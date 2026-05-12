@@ -156,21 +156,93 @@ export class ChunkRenderer {
             uniform mat4 uViewProj;
             varying vec3 vColor;
             varying vec3 vNormal;
+            varying vec3 vWorldPos;
             void main() {
                 gl_Position = uViewProj * vec4(aPosition, 1.0);
                 vColor = aColor;
                 vNormal = aNormal;
+                vWorldPos = aPosition;
             }
         `;
         const fs = `
             precision highp float;
             varying vec3 vColor;
             varying vec3 vNormal;
+            varying vec3 vWorldPos;
+
+            // Simple noise function for bump mapping
+            float hash(vec3 p) {
+                p = fract(p * 0.3183099 + .1);
+                p *= 17.0;
+                return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+            }
+
+            float noise(vec3 x) {
+                vec3 i = floor(x);
+                vec3 f = fract(x);
+                f = f * f * (3.0 - 2.0 * f);
+                return mix(mix(mix(hash(i + vec3(0,0,0)), hash(i + vec3(1,0,0)), f.x),
+                               mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+                           mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+                               mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+            }
+
+            float fbm(vec3 p) {
+                float f = 0.0;
+                f += 0.5000 * noise(p); p = p * 2.02;
+                f += 0.2500 * noise(p); p = p * 2.03;
+                f += 0.1250 * noise(p); p = p * 2.01;
+                f += 0.0625 * noise(p);
+                return f;
+            }
+
+            vec3 calculateBumpNormal(vec3 pos, vec3 normal) {
+                // Determine material type roughly by color to vary bumpiness
+                float isWood = step(0.5, vColor.r) * step(vColor.g, 0.4); // Rough check
+                float isRock = step(0.4, vColor.r) * step(vColor.g, 0.4) * step(vColor.b, 0.4); 
+
+                // frequency and bump scale
+                float freq = mix(2.0, 10.0, isWood);
+                float bumpScale = mix(0.1, 0.3, isRock + isWood);
+
+                vec2 e = vec2(0.01, 0.0);
+                float dx = fbm(pos * freq + e.xyy) - fbm(pos * freq - e.xyy);
+                float dy = fbm(pos * freq + e.yxy) - fbm(pos * freq - e.yxy);
+                float dz = fbm(pos * freq + e.yyx) - fbm(pos * freq - e.yyx);
+
+                vec3 tangentNormal = normalize(vec3(dx, dy, dz) * bumpScale);
+                
+                // Triplanar bitangent/tangent basis approximation
+                vec3 t = normalize(cross(normal, vec3(0.0, 1.0, 0.0)));
+                if (length(t) < 0.1) t = normalize(cross(normal, vec3(1.0, 0.0, 0.0)));
+                vec3 b = cross(normal, t);
+                mat3 tbn = mat3(t, b, normal);
+
+                return normalize(tbn * tangentNormal + normal);
+            }
+
             void main() {
+                vec3 n = normalize(vNormal);
+                // Apply normal mapping / bump mapping
+                vec3 bumpedNormal = calculateBumpNormal(vWorldPos, n);
+
                 vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
-                float diff = max(dot(vNormal, lightDir), 0.2);
-                float ambient = 0.5;
-                gl_FragColor = vec4(vColor * (diff + ambient), 1.0);
+                float diff = max(dot(bumpedNormal, lightDir), 0.0);
+                
+                // Add secondary light to mimic radiosity
+                vec3 backLightDir = normalize(vec3(-0.5, 0.5, -0.3));
+                float backDiff = max(dot(bumpedNormal, backLightDir), 0.0) * 0.3;
+
+                float ambient = 0.4;
+                
+                vec3 finalColor = vColor * (diff + backDiff + ambient);
+                
+                // Simple fog
+                float depth = gl_FragCoord.z / gl_FragCoord.w;
+                float fogFactor = smoothstep(20.0, 100.0, depth);
+                vec3 fogColor = vec3(0.05, 0.08, 0.15); // match sky roughly
+
+                gl_FragColor = vec4(mix(finalColor, fogColor, fogFactor), 1.0);
             }
         `;
         
@@ -224,12 +296,13 @@ export class ChunkRenderer {
                     const hz = holesArray[holeIndex * 4 + 2];
                     const hr = holesArray[holeIndex * 4 + 3];
                     
-                    const minCx = Math.floor((hx - hr) / this.CHUNK_SIZE);
-                    const maxCx = Math.floor((hx + hr) / this.CHUNK_SIZE);
-                    const minCy = Math.floor((hy - hr) / this.CHUNK_SIZE);
-                    const maxCy = Math.floor((hy + hr) / this.CHUNK_SIZE);
-                    const minCz = Math.floor((hz - hr) / this.CHUNK_SIZE);
-                    const maxCz = Math.floor((hz + hr) / this.CHUNK_SIZE);
+                    const margin = 3.0;
+                    const minCx = Math.floor((hx - hr - margin) / this.CHUNK_SIZE);
+                    const maxCx = Math.floor((hx + hr + margin) / this.CHUNK_SIZE);
+                    const minCy = Math.floor((hy - hr - margin) / this.CHUNK_SIZE);
+                    const maxCy = Math.floor((hy + hr + margin) / this.CHUNK_SIZE);
+                    const minCz = Math.floor((hz - hr - margin) / this.CHUNK_SIZE);
+                    const maxCz = Math.floor((hz + hr + margin) / this.CHUNK_SIZE);
 
                     for (let cx = minCx; cx <= maxCx; cx++) {
                         for (let cy = minCy; cy <= maxCy; cy++) {
