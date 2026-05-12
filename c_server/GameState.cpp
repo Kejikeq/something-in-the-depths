@@ -26,28 +26,22 @@ vec3 GameState::getNormal(vec3 p) {
     return vec3(nx/len, ny/len, nz/len);
 }
 
-void GameState::tick(float deltaTime, bool keys[4], bool jump) {
+void GameState::tick(float deltaTime, float moveX, float moveZ, bool jump) {
     uTime += deltaTime * 1000.0f; // Update time (milliseconds equivalent)
 
-    // Calculate Movement Vectors
-    float sy = std::sin(yaw);
-    float cy = std::cos(yaw);
-    
-    float moveDirX = 0.0f;
-    float moveDirZ = 0.0f;
-    
-    // W, A, S, D
-    if (keys[0]) { moveDirX += sy; moveDirZ += cy; }
-    if (keys[2]) { moveDirX -= sy; moveDirZ -= cy; }
-    if (keys[1]) { moveDirX += cy; moveDirZ -= sy; }  // A (Left) -> goes +X (left)
-    if (keys[3]) { moveDirX -= cy; moveDirZ += sy; }  // D (Right) -> goes -X (right)
-    
-    float moveLen = std::sqrt(moveDirX * moveDirX + moveDirZ * moveDirZ);
+    // Apply movement
+    float moveLen = std::sqrt(moveX * moveX + moveZ * moveZ);
     if (moveLen > 0.01f) {
-        moveDirX /= moveLen;
-        moveDirZ /= moveLen;
-        vel.x = moveDirX * MOVE_SPEED;
-        vel.z = moveDirZ * MOVE_SPEED;
+        // Normalization is handled by the caller or applyJoystickInput, 
+        // but we ensure it here too just in case.
+        float normX = moveX;
+        float normZ = moveZ;
+        if (moveLen > 1.0f) {
+            normX /= moveLen;
+            normZ /= moveLen;
+        }
+        vel.x = normX * MOVE_SPEED;
+        vel.z = normZ * MOVE_SPEED;
     } else {
         vel.x *= 0.001f;
         vel.z *= 0.001f;
@@ -97,7 +91,7 @@ void GameState::applyCollision(float dt) {
     
     // Wall Collisions
     float collisionY = pos.y - 0.7f; // Check around waist
-    const float wallThreshold = 0.45f;
+    const float wallThreshold = 0.35f; // Slightly smaller to prevent sticking
     for (int i = 0; i < 8; i++) { // Increased iterations for stability
         float dist = sdfEngine.map(vec3(pos.x, collisionY, pos.z), liftY, uTime).x;
         if (dist < wallThreshold) {

@@ -10,6 +10,7 @@ import { WorldEngine } from './core/WorldEngine';
 import { WebGLRenderer } from './core/WebGLRenderer';
 import { useWasmCore } from './core/useWasmCore';
 import { InputManager, InputState } from './core/InputManager';
+import { WorldPhysics } from './core/WorldPhysics';
 import { MainMenu } from './components/overlay/MainMenu';
 import { ConnectionOverlay } from './components/overlay/ConnectionOverlay';
 
@@ -33,6 +34,23 @@ export default function App() {
   const nearSignRef = useRef(false);
   const [nearLift, setNearLift] = useState(false);
   const nearLiftRef = useRef(false);
+  const [renderScale, setRenderScale] = useState(() => window.innerWidth < 768 ? 0.75 : 1.0);
+  const renderScaleRef = useRef(renderScale);
+
+  useEffect(() => {
+    renderScaleRef.current = renderScale;
+  }, [renderScale]);
+
+  const [tripleBuffering, setTripleBuffering] = useState(true);
+  const tripleBufferingRef = useRef(true);
+  useEffect(() => {
+      tripleBufferingRef.current = tripleBuffering;
+      if (rendererRef.current && rendererRef.current.chunkRenderer) {
+          rendererRef.current.chunkRenderer.tripleBuffering = tripleBuffering;
+      }
+  }, [tripleBuffering]);
+
+
   
   // Rendering settings as state (infrequent changes)
   const [showDebug, setShowDebug] = useState(false);
@@ -69,18 +87,23 @@ export default function App() {
     }
   }, [wasmCore, wasmModule]);
   const wasmCoreRef = useRef<any>(null);
-  useEffect(() => { wasmCoreRef.current = wasmCore; }, [wasmCore]);
+  useEffect(() => { 
+      wasmCoreRef.current = wasmCore; 
+      if (rendererRef.current && wasmCore) {
+          rendererRef.current.setWasmCore(wasmCore);
+      }
+  }, [wasmCore]);
   const wasmModuleRef = useRef<any>(null);
   useEffect(() => { wasmModuleRef.current = wasmModule; }, [wasmModule]);
   const getHolesArrayRef = useRef(getHolesArray);
   useEffect(() => { getHolesArrayRef.current = getHolesArray; }, [getHolesArray]);
 
   // --- HIGH-FREQUENCY GAME STATE (Refs) ---
-  const camPos = useRef({ x: 0, y: 1.5, z: 66 }); 
-  const lastSafePos = useRef({ x: 0, y: 1.5, z: 66 });
+  const camPos = useRef({ x: 0, y: 1.5, z: 0 }); 
+  const lastSafePos = useRef({ x: 0, y: 1.5, z: 0 });
   const velocity = useRef({ x: 0, y: 0, z: 0 });
   const yaw = useRef(3.14); // Facing -Z (towards the pier and lift)
-  const pitch = useRef(-0.1); // Looking slightly down
+  const pitch = useRef(0.0); // Looking straight ahead
   const bobTime = useRef(0);
   const walkCycleTime = useRef(0);
   const uTimeRef = useRef(0);
@@ -167,6 +190,10 @@ export default function App() {
     holesArrayRef.current[idx + 3] = r;
     ringIndexRef.current++;
     numHolesRef.current = Math.min(ringIndexRef.current, MAX_HOLES);
+    
+    if (rendererRef.current && rendererRef.current.particleRenderer) {
+        rendererRef.current.particleRenderer.emit(x, y, z, 50);
+    }
     
     if (emit) {
         audioManager.current.playDigSound();
@@ -434,6 +461,9 @@ export default function App() {
     try {
       rendererRef.current = new WebGLRenderer(canvas);
       glRef.current = rendererRef.current.gl;
+      if (wasmCoreRef.current) {
+         rendererRef.current.setWasmCore(wasmCoreRef.current);
+      }
     } catch (e) {
       console.error(e);
       return;
@@ -448,19 +478,21 @@ export default function App() {
         const dirX = Math.sin(yaw.current) * Math.cos(pitch.current);
         const dirY = Math.sin(pitch.current); 
         const dirZ = Math.cos(yaw.current) * Math.cos(pitch.current);
-        const roX = camPos.current.x;
-        const roY = camPos.current.y;
-        const roZ = camPos.current.z;
+        const ro = { x: camPos.current.x, y: camPos.current.y, z: camPos.current.z };
+        const rd = { x: dirX, y: dirY, z: dirZ };
 
-        if (wasmCoreRef.current) {
-            const hole = wasmCoreRef.current.doDig(dirX, dirY, dirZ);
-            console.log("WASM doDig returned:", hole);
-            if (hole && typeof hole === 'object' && hole.r) {
-                console.log("Adding hole:", hole);
-                addHole(hole.x, hole.y, hole.z, hole.r);
-                audioManager.current.playDigSound();
-                networkClient.current.broadcastDig(hole.x, hole.y, hole.z, hole.r);
-            }
+        const hole = WorldPhysics.doDigRaycast(
+            ro, rd, 
+            liftYRef.current, 
+            holesArrayRef.current, 
+            numHolesRef.current,
+            18.0 // reach of up to ~3 holes in length
+        );
+        
+        if (hole) {
+            addHole(hole.x, hole.y, hole.z, hole.r);
+            audioManager.current.playDigSound();
+            networkClient.current.broadcastDig(hole.x, hole.y, hole.z, hole.r);
         }
     };
 
@@ -521,21 +553,17 @@ export default function App() {
       while(frameTimes.length > 0 && frameTimes[0] < time - 1000) frameTimes.shift();
       fpsRef.current = frameTimes.length;
 
-      // Dynamic Resolution Scaling
-      if (frameCounter % 30 === 0) {
-        if (fpsRef.current < 45) {
-          dynamicResScale = Math.max(0.4, dynamicResScale - 0.05);
-        } else if (fpsRef.current >= 55) {
-          dynamicResScale = Math.min(0.75, dynamicResScale + 0.05);
-        }
-      }
-
+      // Dynamic Resolution Scaling is replaced by controlled Render Scale
       const dpr = Math.min(window.devicePixelRatio, 1.5); // Cap DPR for performance
-      const targetW = Math.floor(window.innerWidth * dpr * dynamicResScale); 
-      const targetH = Math.floor(window.innerHeight * dpr * dynamicResScale);
+      const targetW = Math.floor(window.innerWidth * dpr * renderScaleRef.current); 
+      const targetH = Math.floor(window.innerHeight * dpr * renderScaleRef.current);
       if(canvas.width !== targetW || canvas.height !== targetH) {
          canvas.width = targetW; canvas.height = targetH;
-         gl.viewport(0, 0, canvas.width, canvas.height);
+         if (rendererRef.current) {
+             rendererRef.current.resize(targetW, targetH);
+         } else {
+             gl.viewport(0, 0, canvas.width, canvas.height);
+         }
       }
 
       const sy = Math.sin(yaw.current), cy = Math.cos(yaw.current), sp = Math.sin(pitch.current), cp = Math.cos(pitch.current);
@@ -582,7 +610,7 @@ export default function App() {
                       
                       // Abyss
                       const dEntrance = Math.sqrt(p.x*p.x + p.z*p.z) - 28.0;
-                      if (dEntrance < 0) distToGround = Math.max(distToGround, -( -p.y - 150.0 ));
+                      if (dEntrance < 0) distToGround = Math.max(distToGround, -( -p.y - 250.0 ));
                       
                       // Holes
                       for (let i = 0; i < numHolesRef.current; i++) {
@@ -626,28 +654,38 @@ export default function App() {
       });
 
       if (gameStateRef.current === 'playing') {
-        let isW = false, isS = false, isA = false, isD = false;
         let isMoving = false;
         let jump = false;
 
-        if (inputManagerRef.current) {
+        // --- Lift Animation ---
+        const liftSpeed = WorldEngine.CONFIG.LIFT_SPEED;
+        let liftDeltaY = 0;
+        if (Math.abs(liftYRef.current - liftTargetYRef.current) > 0.01) {
+            const maxDelta = Math.abs(liftTargetYRef.current - liftYRef.current);
+            liftDeltaY = Math.sign(liftTargetYRef.current - liftYRef.current) * Math.min(liftSpeed * dt, maxDelta);
+            liftYRef.current += liftDeltaY;
+        } else {
+            liftYRef.current = liftTargetYRef.current;
+        }
+
+        let gDist = 0;
+
+        if (wasmCoreRef.current && wasmModuleRef.current && inputManagerRef.current) {
+            const core = wasmCoreRef.current;
             const iState = inputManagerRef.current.getState();
+
+            // Handle non-movement actions
             if (iState.action) performDigging();
             if (iState.toggleLight) { flashlightOn.current = flashlightOn.current > 0.5 ? 0.0 : 1.0; }
             if (iState.interact) toggleLift();
             
-            yaw.current += iState.lookX * 0.002;
+            yaw.current -= iState.lookX * 0.002;
             pitch.current -= iState.lookY * 0.002;
             pitch.current = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, pitch.current));
 
-            // WASM engine expects bitmask directions (W = 1, A = 2, S = 4, D = 8)
-            isW = iState.moveY > 0.2;
-            isS = iState.moveY < -0.2;
-            isA = iState.moveX < -0.2;
-            isD = iState.moveX > 0.2;
             isMoving = Math.abs(iState.moveX) > 0.1 || Math.abs(iState.moveY) > 0.1;
             jump = iState.jump;
-            
+
             // Joystick visual sync
             const jData = inputManagerRef.current.getJoystickUIData();
             const jBase = document.getElementById('joystick-base');
@@ -663,49 +701,31 @@ export default function App() {
                     jThumb.style.transform = `translate(0px, 0px)`;
                 }
             }
-        }
-
-        let gDist = 0;
-
-        // --- Lift Animation ---
-        const liftSpeed = WorldEngine.CONFIG.LIFT_SPEED;
-        let liftDeltaY = 0;
-        if (Math.abs(liftYRef.current - liftTargetYRef.current) > 0.01) {
-            const maxDelta = Math.abs(liftTargetYRef.current - liftYRef.current);
-            liftDeltaY = Math.sign(liftTargetYRef.current - liftYRef.current) * Math.min(liftSpeed * dt, maxDelta);
-            liftYRef.current += liftDeltaY;
-        } else {
-            liftYRef.current = liftTargetYRef.current;
-        }
-
-        if (wasmCoreRef.current && wasmModuleRef.current) {
-            const core = wasmCoreRef.current;
-            
-            let bitmask = 0;
-            if (isW) bitmask |= 1;
-            if (isA) bitmask |= 2;
-            if (isS) bitmask |= 4;
-            if (isD) bitmask |= 8;
             
             core.setCameraOrientation(yaw.current, pitch.current);
             core.setLiftY(liftYRef.current);
             
-            // Advance WASM simulation
-            core.update(dt, bitmask, jump);
+            // Advance simulation using refined TS WorldPhysics
+            const nextState = WorldPhysics.tick(
+                camPos.current,
+                velocity.current,
+                dt,
+                iState.moveX,
+                iState.moveY,
+                yaw.current,
+                jump,
+                liftYRef.current,
+                holesArrayRef.current,
+                numHolesRef.current
+            );
             
-            // Sync player position from WASM back to React State / WebGL
-            const pState = core.getPlayerState();
-            camPos.current.x = pState.x;
-            camPos.current.y = pState.y;
-            camPos.current.z = pState.z;
+            camPos.current = nextState.pos;
+            velocity.current = nextState.vel;
             
-            // Sync Holes from shared WASM memory to TypedArray for WebGL shader
-            const rawHoles = getHolesArrayRef.current(core, wasmModuleRef.current);
-            if (rawHoles) {
-                holesArrayRef.current = rawHoles;
-            }
-            numHolesRef.current = core.getNumHoles();
+            // Sync position back to WASM for consistency (digging, other systemic checks)
+            core.setPosition(camPos.current.x, camPos.current.y, camPos.current.z, velocity.current.y);
 
+            const pState = core.getPlayerState();
             gDist = pState.gDist;
 
             // Optional bob and walk cycle timing sync
@@ -860,6 +880,17 @@ export default function App() {
                 domPing.innerText = 'DISCONNECTED';
               }
           }
+          
+          let domChunks = document.getElementById('ui-chunks');
+          if (domChunks && rendererRef.current && rendererRef.current.getChunkProgress) {
+              const progress = rendererRef.current.getChunkProgress();
+              if (progress.pending > 0 || progress.active > 0) {
+                  domChunks.innerText = `GENERATING: ${progress.pending + progress.active} CHUNKS`;
+                  domChunks.style.opacity = '1';
+              } else {
+                  domChunks.style.opacity = '0';
+              }
+          }
       }
 
       if (rendererRef.current) {
@@ -868,9 +899,10 @@ export default function App() {
           camPos: camPos.current,
           camDirX, camDirY, camDirZ,
           camUpX: -sy * sp, camUpY: cp, camUpZ: -cy * sp,
-          camRightX: cy, camRightY: 0, camRightZ: -sy,
+          camRightX: -cy, camRightY: 0, camRightZ: sy,
           holesArray: holesArrayRef.current,
           numHoles: numHolesRef.current,
+          holeVersion: ringIndexRef.current,
           flashlightOn: flashlightOn.current,
           otherPlayersArray: otherPlayersArrayRef.current,
           otherColorsArray: otherColorsArrayRef.current,
@@ -879,7 +911,9 @@ export default function App() {
           walkCycleTime: walkCycleTime.current,
           liftY: liftYRef.current,
           petalsArray: petalsArrayRef.current,
-          activePetals
+          activePetals,
+          performanceMode: renderScaleRef.current < 0.75 ? 1 : (renderScaleRef.current < 1.0 ? 2 : 3),
+          maxDistance: renderScaleRef.current < 0.75 ? 150.0 : (renderScaleRef.current < 1.0 ? 180.0 : 250.0)
         });
       }
     };
@@ -951,6 +985,7 @@ export default function App() {
             </div>
           </div>
           <div id="ui-fps" className="text-emerald-400/40">FPS: --</div>
+          <div id="ui-chunks" className="text-emerald-500 animate-pulse transition-opacity duration-300" style={{opacity: 0}}>GENERATING...</div>
         </div>
         
         {gameState === 'playing' && (
@@ -1068,6 +1103,8 @@ export default function App() {
         setNearSign={setNearSign} nearSignRef={nearSignRef}
         setNearLift={setNearLift} nearLiftRef={nearLiftRef}
         networkClient={networkClient} stats={stats}
+        renderScale={renderScale} setRenderScale={setRenderScale}
+        tripleBuffering={tripleBuffering} setTripleBuffering={setTripleBuffering}
       />
       <WinScreen hasWon={hasWon} />
 

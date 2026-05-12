@@ -23,7 +23,7 @@ public:
     GameState();
 
     // Physics Step
-    void tick(float deltaTime, bool keys[4], bool jump);
+    void tick(float deltaTime, float moveX, float moveZ, bool jump);
 
     // Digging Logic
     void tryDig(vec3 camDir);

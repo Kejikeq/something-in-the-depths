@@ -1,5 +1,5 @@
-import React from 'react';
-import { VolumeX, Volume2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { VolumeX, Volume2, Settings } from 'lucide-react';
 
 interface MainMenuProps {
   gameState: 'menu' | 'playing';
@@ -27,6 +27,10 @@ interface MainMenuProps {
   nearLiftRef: React.MutableRefObject<boolean>;
   networkClient: any;
   stats: any;
+  renderScale: number;
+  setRenderScale: (scale: number) => void;
+  tripleBuffering: boolean;
+  setTripleBuffering: (val: boolean) => void;
 }
 
 export function MainMenu({
@@ -34,23 +38,33 @@ export function MainMenu({
   isMuted, setIsMuted, audioManager, setIsAuthenticating, setAuthError, authError,
   camPos, lastSafePos, yaw, pitch, velocity,
   setHasWon, hasWonRef, setNearSign, nearSignRef, setNearLift, nearLiftRef,
-  networkClient, stats
+  networkClient, stats, renderScale, setRenderScale,
+  tripleBuffering, setTripleBuffering
 }: MainMenuProps) {
-  
+  const [showSettings, setShowSettings] = useState(false);
+
   if (gameState !== 'menu') return null;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-md">
-      <button 
-        onClick={() => {
-          setIsMuted((m: boolean) => !m);
-          audioManager.current.init();
-          audioManager.current.resume();
-        }} 
-        className="absolute top-4 right-4 p-2 rounded-lg bg-black/40 border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20 transition-all pointer-events-auto"
-      >
-        {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-      </button>
+      <div className="absolute top-4 right-4 flex gap-2">
+        <button 
+          onClick={() => setShowSettings(!showSettings)} 
+          className="p-2 rounded-lg bg-black/40 border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20 transition-all pointer-events-auto"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
+        <button 
+          onClick={() => {
+            setIsMuted((m: boolean) => !m);
+            audioManager.current.init();
+            audioManager.current.resume();
+          }} 
+          className="p-2 rounded-lg bg-black/40 border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20 transition-all pointer-events-auto"
+        >
+          {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+        </button>
+      </div>
       <div className="max-w-md w-full p-6 sm:p-8 border border-emerald-500/20 bg-emerald-950/5 flex flex-col items-center gap-6">
         <div className="text-center group">
           <h2 className="font-mono flex items-baseline justify-center gap-2 sm:gap-4 select-none">
@@ -61,8 +75,35 @@ export function MainMenu({
           <p className="text-emerald-600/30 font-mono text-[8px] uppercase tracking-[0.8em] mt-2 opacity-50">Authorized Personnel Only</p>
         </div>
 
-        <div className="w-full flex flex-col gap-3">
-          <div className="flex flex-col gap-1.5">
+        {showSettings ? (
+            <div className="w-full flex flex-col gap-4 animate-in fade-in slide-in-from-top-4">
+                <div className="text-emerald-400 font-mono text-xs uppercase tracking-widest text-center border-b border-emerald-500/20 pb-2">Hardware Configuration</div>
+                
+                {/* Graphics Quality */}
+                <div className="flex flex-col gap-1.5">
+                    <div className="text-emerald-500/40 text-[7px] uppercase tracking-[0.2em] mb-0.5">Graphics Quality</div>
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => setRenderScale(0.5)} className={`flex-1 py-1 font-mono text-[10px] uppercase border transition-all ${renderScale === 0.5 ? 'bg-emerald-500/30 border-emerald-500 text-emerald-400' : 'bg-black/60 border-emerald-500/20 text-emerald-700 hover:bg-emerald-500/10'}`}>Low</button>
+                        <button onClick={() => setRenderScale(0.75)} className={`flex-1 py-1 font-mono text-[10px] uppercase border transition-all ${renderScale === 0.75 ? 'bg-emerald-500/30 border-emerald-500 text-emerald-400' : 'bg-black/60 border-emerald-500/20 text-emerald-700 hover:bg-emerald-500/10'}`}>Med</button>
+                        <button onClick={() => setRenderScale(1.0)} className={`flex-1 py-1 font-mono text-[10px] uppercase border transition-all ${renderScale === 1.0 ? 'bg-emerald-500/30 border-emerald-500 text-emerald-400' : 'bg-black/60 border-emerald-500/20 text-emerald-700 hover:bg-emerald-500/10'}`}>High</button>
+                    </div>
+                </div>
+
+                {/* Buffering Mode */}
+                <div className="flex flex-col gap-1.5">
+                    <div className="text-emerald-500/40 text-[7px] uppercase tracking-[0.2em] mb-0.5">Chunk Buffering</div>
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => setTripleBuffering(false)} className={`flex-1 py-1 font-mono text-[10px] border transition-all ${!tripleBuffering ? 'bg-emerald-500/30 border-emerald-500 text-emerald-400' : 'bg-black/60 border-emerald-500/20 text-emerald-700 hover:bg-emerald-500/10'}`}>Double</button>
+                        <button onClick={() => setTripleBuffering(true)} className={`flex-1 py-1 font-mono text-[10px] border transition-all ${tripleBuffering ? 'bg-emerald-500/30 border-emerald-500 text-emerald-400' : 'bg-black/60 border-emerald-500/20 text-emerald-700 hover:bg-emerald-500/10'}`}>Triple</button>
+                    </div>
+                    <p className="text-emerald-600/40 text-[7px] font-mono leading-tight mt-1">Triple buffering caches pending chunks to reduce visual stutter during complex procedural generation.</p>
+                </div>
+
+                <button onClick={() => setShowSettings(false)} className="w-full py-2 mt-2 bg-black border border-emerald-500/40 text-emerald-500 font-mono text-[10px] uppercase tracking-[0.2em] hover:bg-emerald-500/20 transition-all">Back</button>
+            </div>
+        ) : (
+          <div className="w-full flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
             <label className="text-emerald-500/40 font-mono text-[8px] uppercase tracking-widest text-center">Identifying Signal</label>
             <input 
               type="text" 
@@ -172,10 +213,11 @@ export function MainMenu({
 
           <div className="text-emerald-500/30 text-[8px] font-mono text-center mt-6 space-y-1 border-t border-emerald-500/5 pt-4">
             <p>WASD: LOCOMOTION | SPACE: JUMP | MOUSE: ROTATION</p>
-            <p>CLICK / TAP: EXCAVATE | F: ILLUMINATION | 1-5: TOOLS</p>
-            <p className="text-cyan-400/60 animate-pulse uppercase">Objective: Find the crystal chest in the ???</p>
+            <p>CLICK / TAP: EXCAVATE | F: ILLUMINATION</p>
+            <p className="text-cyan-400/60 animate-pulse uppercase">Objective: Descend to the void</p>
           </div>
         </div>
+        )}
       </div>
     </div>
   );
