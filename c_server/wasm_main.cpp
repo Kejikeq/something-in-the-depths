@@ -111,7 +111,15 @@ public:
             for (int cy = minCY; cy <= maxCY; cy += 32) {
                 for (int cz = minCZ; cz <= maxCZ; cz += 32) {
                     uint64_t key = state.sdfEngine.getChunkKey(cx, cy, cz);
-                    ChunkGrid& grid = state.sdfEngine.voxelGrids[key];
+                    ChunkGrid* gridPtr = nullptr;
+                    auto it = state.sdfEngine.voxelGrids.find(key);
+                    if (it == state.sdfEngine.voxelGrids.end()) {
+                        gridPtr = new ChunkGrid();
+                        state.sdfEngine.voxelGrids[key] = gridPtr;
+                    } else {
+                        gridPtr = it->second;
+                    }
+                    ChunkGrid& grid = *gridPtr;
                     
                     if (!grid.initialized) {
                         // Initialize grid from base SDF
@@ -119,7 +127,7 @@ public:
                             for (int gy = 0; gy < 33; gy++) {
                                 for (int gx = 0; gx < 33; gx++) {
                                     vec3 p((float)cx + gx, (float)cy + gy, (float)cz + gz);
-                                    vec2 res = state.sdfEngine.map(p, 0.0f, 0.0f);
+                                    vec2 res = state.sdfEngine.map(p);
                                     int gidx = gx + gy * 33 + gz * 33 * 33;
                                     grid.data[gidx] = res.x;
                                     grid.mats[gidx] = res.y;
@@ -202,10 +210,18 @@ public:
     }
 
     MeshResult generateChunkMesh(float cx, float cy, float cz, int gridSize) {
-        float SPACING = 1.0f;
+        float SPACING = 1.0f; // Smoothed spacing
         
         uint64_t key = state.sdfEngine.getChunkKey((int)cx, (int)cy, (int)cz);
-        ChunkGrid& grid = state.sdfEngine.voxelGrids[key];
+        ChunkGrid* gridPtr = nullptr;
+        auto it = state.sdfEngine.voxelGrids.find(key);
+        if (it == state.sdfEngine.voxelGrids.end()) {
+            gridPtr = new ChunkGrid();
+            state.sdfEngine.voxelGrids[key] = gridPtr;
+        } else {
+            gridPtr = it->second;
+        }
+        ChunkGrid& grid = *gridPtr;
 
         if (!grid.initialized) {
             // 1. Initialize from base terrain
@@ -349,7 +365,16 @@ public:
                                 vec3 p1(cx + vx1 * SPACING, cy + vy1 * SPACING, cz + vz1 * SPACING);
                                 vec3 p = p0 + (p1 - p0) * t;
                                 
-                                vec3 norm = getNormal(vx0, vy0, vz0); // Simplified normal from grid
+                                // Global seamless normal calculation
+                                float eps = 0.05f;
+                                float nx = state.sdfEngine.map(vec3(p.x + eps, p.y, p.z)).x - state.sdfEngine.map(vec3(p.x - eps, p.y, p.z)).x;
+                                float ny = state.sdfEngine.map(vec3(p.x, p.y + eps, p.z)).x - state.sdfEngine.map(vec3(p.x, p.y - eps, p.z)).x;
+                                float nz = state.sdfEngine.map(vec3(p.x, p.y, p.z + eps)).x - state.sdfEngine.map(vec3(p.x, p.y, p.z - eps)).x;
+                                vec3 norm(nx, ny, nz);
+                                float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);
+                                if (nLen > 0.0001f) { norm.x /= nLen; norm.y /= nLen; norm.z /= nLen; }
+                                else { norm = vec3(0, 1, 0); }
+                                
                                 float matId = (t < 0.5f) ? m[v0] : m[v1];
                                 vec3 col = getColor(matId);
                                 

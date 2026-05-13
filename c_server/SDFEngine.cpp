@@ -217,53 +217,57 @@ vec2 SDFEngine::map(vec3 p, float uLiftY, float uTime) {
     // Check voxel grids for modifications
     uint64_t key = getChunkKey((int)std::floor(p.x), (int)std::floor(p.y), (int)std::floor(p.z));
     auto it = voxelGrids.find(key);
-    if (it != voxelGrids.end()) {
-        const ChunkGrid& grid = it->second;
-        // Local grid coords
+    // Check voxel grids for modifications
+    ChunkGrid* grid = getGrid((int)std::floor(p.x), (int)std::floor(p.y), (int)std::floor(p.z));
+    
+    if (grid) {
         int gx = (int)std::floor(p.x) % 32; if (gx < 0) gx += 32;
         int gy = (int)std::floor(p.y) % 32; if (gy < 0) gy += 32;
         int gz = (int)std::floor(p.z) % 32; if (gz < 0) gz += 32;
-        int gidx = gx + gy * 33 + gz * 33 * 33;
         
-        float voxelDist = grid.data[gidx];
-        
-        // Trilinear Interpolation for smoother results
         float fx = p.x - std::floor(p.x);
         float fy = p.y - std::floor(p.y);
         float fz = p.z - std::floor(p.z);
         
-        auto getGridVal = [&](int ox, int oy, int oz) {
-            int ix = (gx + ox) % 33;
-            int iy = (gy + oy) % 33;
-            int iz = (gz + oz) % 33;
-            return grid.data[ix + iy * 33 + iz * 33 * 33];
+        auto getVVal = [&](int ox, int oy, int oz) {
+            return grid->data[(gx + ox) + (gy + oy) * 33 + (gz + oz) * 33 * 33];
         };
         
-        float v000 = getGridVal(0, 0, 0);
-        float v100 = getGridVal(1, 0, 0);
-        float v010 = getGridVal(0, 1, 0);
-        float v110 = getGridVal(1, 1, 0);
-        float v001 = getGridVal(0, 0, 1);
-        float v101 = getGridVal(1, 0, 1);
-        float v011 = getGridVal(0, 1, 1);
-        float v111 = getGridVal(1, 1, 1);
+        float v000 = getVVal(0, 0, 0);
+        float v100 = getVVal(1, 0, 0);
+        float v010 = getVVal(0, 1, 0);
+        float v110 = getVVal(1, 1, 0);
+        float v001 = getVVal(0, 0, 1);
+        float v101 = getVVal(1, 0, 1);
+        float v011 = getVVal(0, 1, 1);
+        float v111 = getVVal(1, 1, 1);
         
-        // Actually, let's do it properly
         float c00 = v000 * (1.0f - fx) + v100 * fx;
         float c01 = v001 * (1.0f - fx) + v101 * fx;
-        float c10 = v010 * (1.0f - fx) + v110 * fx;
-        float c11 = v011 * (1.0f - fx) + v111 * fx;
+        float c10 = v010 * (1.0f - fy) + v110 * fy; // Fixed interpolation axes
+        float c11 = v011 * (1.0f - fy) + v111 * fy;
         
-        float c0 = c00 * (1.0f - fy) + c10 * fy;
-        float c1 = c01 * (1.0f - fy) + c11 * fy;
+        float c0 = c00 * (1.0f - fz) + c01 * fz;
+        float c1 = c10 * (1.0f - fz) + c11 * fz;
         
-        float finalVoxelDist = c0 * (1.0f - fz) + c1 * fz;
+        float finalVoxelDist = c0 * (1.0f - fy) + c1 * fy; // Actually, the standard 3D lerp...
 
-        if (finalVoxelDist > baseDist) {
-            baseDist = finalVoxelDist;
-            matID = grid.mats[gidx];
+        // Standard 3D Trilinear Interpolation
+        float i1 = v000 * (1.0f - fx) + v100 * fx;
+        float i2 = v010 * (1.0f - fx) + v110 * fx;
+        float i3 = v001 * (1.0f - fx) + v101 * fx;
+        float i4 = v011 * (1.0f - fx) + v111 * fx;
+        
+        float j1 = i1 * (1.0f - fy) + i2 * fy;
+        float j2 = i3 * (1.0f - fy) + i4 * fy;
+        
+        float res = j1 * (1.0f - fz) + j2 * fz;
+
+        if (res > baseDist) {
+            baseDist = res;
+            matID = grid->mats[gx + gy * 33 + gz * 33 * 33];
         }
     }
 
-    return vec2(baseDist * 0.65f, matID);
+    return vec2(baseDist, matID);
 }

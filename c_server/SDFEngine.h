@@ -60,14 +60,30 @@ public:
     int numHoles = 0;
     int holeIndex = 0;
     
-    std::unordered_map<uint64_t, ChunkGrid> voxelGrids;
+    std::unordered_map<uint64_t, ChunkGrid*> voxelGrids;
+    
+    // Simple cache for faster lookups
+    uint64_t lastKey = 0xFFFFFFFFFFFFFFFF;
+    ChunkGrid* lastGrid = nullptr;
 
     uint64_t getChunkKey(int x, int y, int z) {
-        // Correct chunk rounding for both positive and negative coords
         int cx = (x >= 0) ? (x / 32) : ((x - 31) / 32);
         int cy = (y >= 0) ? (y / 32) : ((y - 31) / 32);
         int cz = (z >= 0) ? (z / 32) : ((z - 31) / 32);
         return ((uint64_t)(cx & 0xFFFFF)) | (((uint64_t)(cy & 0xFFFFF)) << 20) | (((uint64_t)(cz & 0xFFFFF)) << 40);
+    }
+    
+    ChunkGrid* getGrid(int x, int y, int z) {
+        uint64_t key = getChunkKey(x, y, z);
+        if (key == lastKey) return lastGrid;
+        
+        auto it = voxelGrids.find(key);
+        if (it != voxelGrids.end()) {
+            lastKey = key;
+            lastGrid = it->second;
+            return lastGrid;
+        }
+        return nullptr;
     }
 
     // Base Modifiers
