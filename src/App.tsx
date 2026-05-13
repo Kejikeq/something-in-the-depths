@@ -83,6 +83,31 @@ export default function App() {
     }));
   }, []);
   const { wasmCore, wasmModule, getHolesArray } = useWasmCore();
+  
+  // WASM Hot-Reload Watchdog
+  const [wasmVersion, setWasmVersion] = useState(0);
+  useEffect(() => {
+    let checkInterval: any;
+    if (process.env.NODE_ENV !== 'production') {
+      const checkVersion = async () => {
+        try {
+          const res = await fetch('/api/wasm-version');
+          if (res.ok) {
+            const data = await res.json();
+            if (wasmVersion !== 0 && data.version > wasmVersion) {
+              console.log("WASM update detected! Reloading core...");
+              window.location.reload(); // Simplest way to ensure clean state
+            } else if (wasmVersion === 0) {
+              setWasmVersion(data.version);
+            }
+          }
+        } catch (e) {}
+      };
+      checkInterval = setInterval(checkVersion, 3000);
+    }
+    return () => clearInterval(checkInterval);
+  }, [wasmVersion]);
+
   useEffect(() => { 
     if (wasmCore && wasmModule) {
       ctx.network.setWasmCore(wasmCore, wasmModule);
@@ -357,7 +382,7 @@ export default function App() {
       <div className="absolute top-6 left-6 flex gap-4 items-center pointer-events-none z-[60]">
         <button 
           onClick={() => {
-            ctx.player.pos = new vec3(0, 10, 66); // High spawn trigger
+            ctx.player.pos = new vec3(50, 10, 50); // New safe spawn
             setGameState('menu');
           }}
           className="p-3 rounded-xl bg-black/40 border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20 transition-all pointer-events-auto"

@@ -173,52 +173,188 @@ float SDFEngine::sdTerrain(vec3 p) {
     return dTerrain;
 }
 
-// Analytical Ray-Sphere Intersection for Digging (replaces CPU Raymarching)
-float SDFEngine::intersectHolesAnalytical(vec3 ro, vec3 rd, float maxDist) {
-    float closestHit = maxDist;
-    for (int i = 0; i < numHoles && i < 64; ++i) {
-        vec3 oc = ro - vec3(holes[i].x, holes[i].y, holes[i].z);
-        float b = dot(oc, rd);
-        float c = dot(oc, oc) - holes[i].r * holes[i].r;
-        float h = b * b - c;
-        if (h > 0.0f) {
-            h = std::sqrt(h);
-            float t = -b - h; // nearest hit
-            if (t > 0.0f && t < closestHit) {
-                closestHit = t;
+float SDFEngine::getTerrainMat(vec3 p) {
+    float r = length(vec2(p.x, p.z));
+    if (r > 96.0f) return 1.0f; // Stone outer wall
+    
+    // Biomes by depth
+    if (p.y > -2.0f) return 2.0f;  // Grass (using mat 2)
+    if (p.y < -350.0f) return 6.0f; // Abyss
+    if (p.y < -120.0f) return 5.0f; // Jungle (using mat 5)
+    if (p.y < -15.0f) return 1.0f;  // Rock deep
+    
+    return 3.0f; // Dirt/Soil (using mat 3)
+}
+
+void SDFEngine::digVoxel(vec3 p, float r) {
+    int xmin = (int)std::floor(p.x - r - 2.0f);
+    int xmax = (int)std::ceil(p.x + r + 2.0f);
+    int ymin = (int)std::floor(p.y - r - 2.0f);
+    int ymax = (int)std::ceil(p.y + r + 2.0f);
+    int zmin = (int)std::floor(p.z - r - 2.0f);
+    int zmax = (int)std::ceil(p.z + r + 2.0f);
+
+    for (int x = xmin; x <= xmax; x++) {
+        for (int y = ymin; y <= ymax; y++) {
+            for (int z = zmin; z <= zmax; z++) {
+                // A point (x,y,z) can be on the boundary of up to 8 chunks.
+                // We need to update all grids that share this voxel coordinate.
+                for (int dx = -1; dx <= 0; dx++) {
+                    for (int dy = -1; dy <= 0; dy++) {
+                        for (int dz = -1; dz <= 0; dz++) {
+                            int cx = ((x + dx * 32) / 32) * 32;
+                            if (x + dx * 32 < 0) cx = ((x + dx * 32 - 31) / 32) * 32;
+                            int cy = ((y + dy * 32) / 32) * 32;
+                            if (y + dy * 32 < 0) cy = ((y + dy * 32 - 31) / 32) * 32;
+                            int cz = ((z + dz * 32) / 32) * 32;
+                            if (z + dz * 32 < 0) cz = ((z + dz * 32 - 31) / 32) * 32;
+
+                            int lx = x - cx;
+                            int ly = y - cy;
+                            int lz = z - cz;
+
+                            if (lx >= 0 && lx <= 32 && ly >= 0 && ly <= 32 && lz >= 0 && lz <= 32) {
+                                uint64_t key = getChunkKey(cx, cy, cz);
+                                auto it = voxelGrids.find(key);
+                                ChunkGrid* grid = nullptr;
+                                if (it == voxelGrids.end()) {
+                                    grid = new ChunkGrid();
+                                    grid->initialized = true;
+                                    for (int lz2 = 0; lz2 <= 32; lz2++) {
+                                        for (int ly2 = 0; ly2 <= 32; ly2++) {
+                                            for (int lx2 = 0; lx2 <= 32; lx2++) {
+                                                vec3 lp((float)(cx + lx2), (float)(cy + ly2), (float)(cz + lz2));
+                                                int gidx2 = lx2 + ly2 * 33 + lz2 * 33 * 33;
+                                                grid->data[gidx2] = sdTerrain(lp);
+                                                grid->mats[gidx2] = getTerrainMat(lp);
+                                            }
+                                        }
+                                    }
+                                    voxelGrids[key] = grid;
+                                } else {
+                                    grid = it->second;
+                                }
+
+                                float ddx = (float)x - p.x;
+                                float ddy = (float)y - p.y;
+                                float ddz = (float)z - p.z;
+                                float distToHole = r - std::sqrt(ddx*ddx + ddy*ddy + ddz*dz);
+                                
+                                int gidx = lx + ly * 33 + lz * 33 * 33;
+                                if (distToHole > grid->data[gidx]) {
+                                    grid->data[gidx] = distToHole;
+                                    grid->mats[gidx] = getTerrainMat(vec3((float)x, (float)y, (float)z));
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
-    return closestHit; // Returns maxDist if no hit
 }
 
 float SDFEngine::getVoxelData(int x, int y, int z) {
-    ChunkGrid* grid = getGrid(x, y, z);
-    if (!grid || !grid->initialized) return -1000000.0f; // Very inside/solid fallback
-    int gx = x % 32; if (gx < 0) gx += 32;
-    int gy = y % 32; if (gy < 0) gy += 32;
-    int gz = z % 32; if (gz < 0) gz += 32;
-    return grid->data[gx + gy * 33 + gz * 33 * 33];
+    // We want to find a chunk that contains this point AND is initialized.
+    // Standard chunk for (x,y,z) is getGrid(x,y,z).
+    // But points on boundaries (multiple of 32) can be found in multiple chunks.
+    
+    auto trySample = [&](int cx, int cy, int cz) -> float {
+        ChunkGrid* g = getGrid(cx, cy, cz);
+        if (g && g->initialized) {
+            int lx = x - cx;
+            int ly = y - cy;
+            int lz = z - cz;
+            if (lx >= 0 && lx <= 32 && ly >= 0 && ly <= 32 && lz >= 0 && lz <= 32) {
+                return g->data[lx + ly * 33 + lz * 33 * 33];
+            }
+        }
+        return -2000000.0f; // Unique sentinel
+    };
+
+    // 1. Try the "next" chunk (the one starting at standard floor/32*32)
+    int cx0 = (x >= 0) ? (x / 32) * 32 : ((x - 31) / 32) * 32;
+    int cy0 = (y >= 0) ? (y / 32) * 32 : ((y - 31) / 32) * 32;
+    int cz0 = (z >= 0) ? (z / 32) * 32 : ((z - 31) / 32) * 32;
+    
+    float val = trySample(cx0, cy0, cz0);
+    if (val > -1500000.0f) return val;
+
+    // 2. If it's a boundary, try the "previous" chunk(s)
+    // This is critical for seamless mapping when neighbors aren't initialized
+    if ((x % 32) == 0) {
+        val = trySample(cx0 - 32, cy0, cz0);
+        if (val > -1500000.0f) return val;
+    }
+    if ((y % 32) == 0) {
+        val = trySample(cx0, cy0 - 32, cz0);
+        if (val > -1500000.0f) return val;
+    }
+    if ((z % 32) == 0) {
+        val = trySample(cx0, cy0, cz0 - 32);
+        if (val > -1500000.0f) return val;
+    }
+
+    return -1000000.0f; // Final solid fallback
+}
+
+float SDFEngine::getVoxelMat(int x, int y, int z) {
+    auto trySample = [&](int cx, int cy, int cz) -> float {
+        ChunkGrid* g = getGrid(cx, cy, cz);
+        if (g && g->initialized) {
+            int lx = x - cx;
+            int ly = y - cy;
+            int lz = z - cz;
+            if (lx >= 0 && lx <= 32 && ly >= 0 && ly <= 32 && lz >= 0 && lz <= 32) {
+                return g->mats[lx + ly * 33 + lz * 33 * 33];
+            }
+        }
+        return -1.0f;
+    };
+
+    int cx0 = (x >= 0) ? (x / 32) * 32 : ((x - 31) / 32) * 32;
+    int cy0 = (y >= 0) ? (y / 32) * 32 : ((y - 31) / 32) * 32;
+    int cz0 = (z >= 0) ? (z / 32) * 32 : ((z - 31) / 32) * 32;
+    
+    float val = trySample(cx0, cy0, cz0);
+    if (val >= 0.0f && val <= 10.0f) return val;
+
+    if ((x % 32) == 0) {
+        val = trySample(cx0 - 32, cy0, cz0);
+        if (val >= 0.0f && val <= 10.0f) return val;
+    }
+    if ((y % 32) == 0) {
+        val = trySample(cx0, cy0 - 32, cz0);
+        if (val >= 0.0f && val <= 10.0f) return val;
+    }
+    if ((z % 32) == 0) {
+        val = trySample(cx0, cy0, cz0 - 32);
+        if (val >= 0.0f && val <= 10.0f) return val;
+    }
+
+    return -1.0f; 
+}
+
+inline float opSmoothSubtraction(float d1, float d2, float k) {
+    float h = std::max(0.5f - 0.5f * (d2 + d1) / k, 0.0f);
+    h = std::min(h, 1.0f);
+    return d2 * (1.0f - h) + (-d1) * h + k * h * (1.0f - h);
 }
 
 // Master Scene Graph Combiner
 vec2 SDFEngine::map(vec3 p, float uLiftY, float uTime) {
-    vec2 res = vec2(sdTerrain(p), 0.0f);
+    float dBase = sdTerrain(p);
+    float baseMat = getTerrainMat(p);
+    vec2 res = vec2(dBase, baseMat);
 
     vec2 bridgeRes = sdBridge(p);
     if (bridgeRes.x < res.x) res = bridgeRes;
 
     vec2 liftRes = sdLift(p, uLiftY, uTime);
     if (liftRes.x < res.x) res = liftRes;
-
-    vec3 treePos = vec3(34.0f, -1.0f, -8.0f);
-    vec3 tp = p - treePos;
-    vec2 treeRes = sdSakuraTree(tp);
-    float dWoodSkin = smin(res.x, treeRes.x, 0.5f);
-    if (dWoodSkin < res.x) {
-        res = vec2(dWoodSkin, treeRes.x < res.x ? 3.0f : res.y);
-    }
-    if (treeRes.y < res.x) res = vec2(treeRes.y, 2.0f);
+    
+    // Add visual lift effect AFTER structural SDF
+    // res.x += uLiftY; // Incorrect - lift already handled in sdLift
 
     float baseDist = res.x;
     float matID = res.y;

@@ -52,10 +52,6 @@ export const WORLD_CONFIG = {
         varying vec2 vUv;
         uniform sampler2D uScene;
         uniform vec2 uResolution;
-        uniform float uTime;
-        uniform vec3 uCamDir;
-        uniform vec3 uCamUp;
-        uniform vec3 uCamRight;
         uniform int uPerfMode;
     
         void main() {
@@ -63,32 +59,8 @@ export const WORLD_CONFIG = {
             vec4 sceneVal = texture2D(uScene, vUv);
             vec3 col = sceneVal.rgb;
             
-            if (sceneVal.a < 0.1) {
-                // Background (sky), already rendered and color converted
-                col = sceneVal.rgb;
-            } else {
-                // Apply lightweight AA on voxels
-                if (uPerfMode <= 2) {
-                    vec3 c_n = texture2D(uScene, vUv + vec2(0, texel.y)).rgb;
-                    vec3 c_s = texture2D(uScene, vUv - vec2(0, texel.y)).rgb;
-                    vec3 c_e = texture2D(uScene, vUv + vec2(texel.x, 0)).rgb;
-                    vec3 c_w = texture2D(uScene, vUv - vec2(texel.x, 0)).rgb;
-                    
-                    float l = dot(col, vec3(0.299, 0.587, 0.114));
-                    float l_n = dot(c_n, vec3(0.299, 0.587, 0.114));
-                    float l_s = dot(c_s, vec3(0.299, 0.587, 0.114));
-                    float l_e = dot(c_e, vec3(0.299, 0.587, 0.114));
-                    float l_w = dot(c_w, vec3(0.299, 0.587, 0.114));
-                    
-                    float edge = max(l, max(max(l_n, l_s), max(l_e, l_w))) - 
-                                 min(l, min(min(l_n, l_s), min(l_e, l_w)));
-                    
-                    if (edge > 0.08) {
-                        float mixFactor = uPerfMode == 1 ? 0.4 : 0.2;
-                        col = mix(col, (c_n + c_s + c_e + c_w) * 0.25, mixFactor);
-                    }
-                }
-            }
+            // Basic gamma correction for better visibility
+            col = pow(col, vec3(0.8));
             
             gl_FragColor = vec4(col, 1.0);
         }
@@ -255,7 +227,7 @@ export class VoxelEngine {
         let grounded = (gDist < 0.3 && nVel.y <= 0.1);
         if (jump && grounded) nVel.y = WORLD_CONFIG.JUMP_STRENGTH;
 
-        if (nPos.y < -510) { nPos = new vec3(0, 1.5, 0); nVel = new vec3(0, 0, 0); }
+        if (nPos.y < -510) { nPos = new vec3(50, 1.5, 50); nVel = new vec3(0, 0, 0); }
         return { pos: nPos, vel: nVel };
     }
 }

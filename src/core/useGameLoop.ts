@@ -234,8 +234,8 @@ export function useGameLoop(deps: GameLoopDeps) {
         }
 
       } else {
-        ctx.player.yaw += dt * 0.1;
-        ctx.player.pos = new vec3(-8.0, 3.5, 20.0);
+        ctx.player.yaw += dt * 0.05;
+        ctx.player.pos = new vec3(50.0, 5.0, 50.0); // Safe grassy area
         deps.uTimeRef.current = time * 0.001;
       }
       

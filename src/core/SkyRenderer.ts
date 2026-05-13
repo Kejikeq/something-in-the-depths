@@ -1,4 +1,3 @@
-import { WorldEngine } from './WorldEngine';
 import { createPerspective, createLookAt, multiplyMatrices } from './mathUtils';
 
 export class SkyRenderer {
@@ -16,8 +15,8 @@ export class SkyRenderer {
       varying vec2 vUv;
       void main() {
           vUv = position * 0.5 + 0.5;
-          // Render at the furthest depth (z = 0.9999 or 1.0)
-          gl_Position = vec4(position, 0.99999, 1.0);
+          // Render at the furthest depth (z = 1.0)
+          gl_Position = vec4(position, 1.0, 1.0);
       }
     `);
     gl.compileShader(vs);
@@ -96,6 +95,9 @@ export class SkyRenderer {
     gl.attachShader(this.program, vs);
     gl.attachShader(this.program, fs);
     gl.linkProgram(this.program);
+    if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) {
+        console.error("Sky Program Link Error:", gl.getProgramInfoLog(this.program));
+    }
 
     this.posBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuffer);

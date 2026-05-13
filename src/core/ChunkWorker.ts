@@ -22,7 +22,7 @@ self.onmessage = (e) => {
     const data = e.data;
     
     if (data.type === 'GENERATE') {
-        const { cx, cy, cz, size, id } = data;
+        const { cx, cy, cz, size, id, lod } = data;
         
         if (!wasmCore) {
             self.postMessage({ type: 'ERROR', id, cx, cy, cz, error: 'WASM not ready' });
@@ -31,26 +31,21 @@ self.onmessage = (e) => {
 
         try {
             const dims = size + 1;
-            const originX = cx * size;
-            const originY = cy * size;
-            const originZ = cz * size;
+            const originX = cx * size * (1 << (lod || 0));
+            const originY = cy * size * (1 << (lod || 0));
+            const originZ = cz * size * (1 << (lod || 0));
             
-            // Removed the per-chunk filtering and addHole loop during GENERATE.
-            // Persistence is now handled within WASM's voxelGrids and holes history.
-
-            const mesh = wasmCore.generateChunkMesh(originX, originY, originZ, dims);
+            const mesh = wasmCore.generateChunkMesh(originX, originY, originZ, dims, lod || 0);
             
-            if (!mesh.vertices || mesh.vertices.length === 0) {
+            const vertices = mesh.vertices ? new Float32Array(mesh.vertices) : new Float32Array(0);
+            const normals = mesh.normals ? new Float32Array(mesh.normals) : new Float32Array(0);
+            const colors = mesh.colors ? new Float32Array(mesh.colors) : new Float32Array(0);
+            const indices = mesh.indices ? new Uint32Array(mesh.indices) : new Uint32Array(0);
+            
+            if (vertices.length === 0) {
                 self.postMessage({ type: 'RESULT', id, cx, cy, cz, empty: true });
                 return;
             }
-            
-            // Ensure we copy the data out of the WASM heap! 
-            // If the Wasm returning `val` was a direct view, transferring it would detach the WASM memory buffer!
-            const vertices = new Float32Array(mesh.vertices);
-            const normals = new Float32Array(mesh.normals);
-            const colors = new Float32Array(mesh.colors);
-            const indices = new Uint32Array(mesh.indices);
             
             self.postMessage({
                 type: 'RESULT', id, cx, cy, cz,

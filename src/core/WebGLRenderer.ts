@@ -2,6 +2,7 @@ import { WORLD_CONFIG } from './VoxelEngine';
 import { ChunkRenderer } from './ChunkRenderer';
 import { ParticleRenderer } from './ParticleRenderer';
 import { SkyRenderer } from './SkyRenderer';
+import { TreeRenderer } from './TreeRenderer';
 import { createPerspective, createLookAt, multiplyMatrices } from './mathUtils';
 
 export interface RenderState {
@@ -44,6 +45,7 @@ export class WebGLRenderer {
   private chunkRenderer: ChunkRenderer;
   public particleRenderer: ParticleRenderer;
   private skyRenderer: SkyRenderer;
+  private treeRenderer: TreeRenderer;
   private wasmCore: any = null;
   private _lastTime: number = 0;
 
@@ -56,6 +58,7 @@ export class WebGLRenderer {
     this.skyRenderer = new SkyRenderer(gl);
     this.chunkRenderer = new ChunkRenderer(gl);
     this.particleRenderer = new ParticleRenderer(gl);
+    this.treeRenderer = new TreeRenderer(this);
 
     const compileShader = (type: number, source: string) => {
       const shader = gl.createShader(type);
@@ -152,7 +155,15 @@ export class WebGLRenderer {
 
     // Pass 1: Render Scene to FBO
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
-    gl.clearColor(0.0, 0.0, 0.0, 0.0);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.clearColor(1.0, 0.5, 0.0, 1.0); // Orange: FBO incomplete
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        return;
+    }
+
+    gl.clearColor(0.0, 0.0, 0.0, 1.0); // Black: Scene clear
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     
     // Scale FOV so it perfectly matches the standard 80 degree vertical FOV used in createPerspective.
@@ -181,6 +192,11 @@ export class WebGLRenderer {
     gl.enable(gl.DEPTH_TEST);
     this.chunkRenderer.render(viewProj);
     
+    // Render custom 3D Tree
+    const camUp = [state.camUpX, state.camUpY, state.camUpZ];
+    const camRight = [state.camRightX, state.camRightY, state.camRightZ];
+    this.treeRenderer.render(viewProj, state.time, camRight, camUp);
+    
     // Render particles
     // We need delta time for update. Since we only have total time, keep track of last time.
     if (!this._lastTime) this._lastTime = state.time;
@@ -194,6 +210,7 @@ export class WebGLRenderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(this.postProgram);
     gl.disable(gl.DEPTH_TEST);
+    gl.clearColor(0.1, 0.2, 0.3, 1.0); // Dark Blue: Canvas clear
     gl.clear(gl.COLOR_BUFFER_BIT);
     
     const postPositionLocation = gl.getAttribLocation(this.postProgram, "position");

@@ -3,6 +3,7 @@ import { createServer as createViteServer } from "vite";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import path from "path";
+import fs from "fs";
 
 const ZONE_SIZE = 50;
 
@@ -114,6 +115,20 @@ class GameServer {
         stats.rooms.push({ id, players: count });
       });
       res.json(stats);
+    });
+
+    app.get("/api/wasm-version", (_req: any, res: any) => {
+      const wasmPath = path.join(process.cwd(), "public", "game_core.wasm");
+      try {
+        if (fs.existsSync(wasmPath)) {
+          const stats = fs.statSync(wasmPath);
+          res.json({ version: stats.mtimeMs });
+        } else {
+          res.json({ version: 0 });
+        }
+      } catch (e) {
+        res.status(500).json({ error: "Failed to check WASM status" });
+      }
     });
     
     this.wss.on("error", (err) => {

@@ -99,6 +99,7 @@ public:
     vec2 sdLift(vec3 p, float uLiftY, float uTime);
     vec2 sdBridge(vec3 p);
     float sdTerrain(vec3 p);
+    float getTerrainMat(vec3 p);
 
     // Analytical Digging
     float intersectHolesAnalytical(vec3 ro, vec3 rd, float maxDist);
@@ -118,4 +119,6 @@ public:
     // Master scene graph map
     vec2 map(vec3 p, float uLiftY, float uTime);
     float getVoxelData(int x, int y, int z);
+    float getVoxelMat(int x, int y, int z);
+    void digVoxel(vec3 p, float r);
 };

@@ -13,7 +13,7 @@ export function useWasmCore() {
             try {
                 const Module = (await initWasmModule({
                     locateFile: (path: string) => {
-                        if (path.endsWith('.wasm')) return '/' + path;
+                        if (path.endsWith('.wasm')) return '/' + path + '?v=' + Date.now();
                         return path;
                     }
                 })) as any;

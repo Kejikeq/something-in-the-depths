@@ -92,80 +92,11 @@ public:
         HoleStruct* src = reinterpret_cast<HoleStruct*>(data);
         for (int i = 0; i < count; i++) {
             state.sdfEngine.holes[i] = src[i];
+            // Apply each hole to the voxel system
+            state.sdfEngine.digVoxel(vec3(src[i].x, src[i].y, src[i].z), src[i].r);
         }
         state.sdfEngine.numHoles = count;
         state.sdfEngine.holeIndex = count % 2048;
-    }
-
-    void applyHoleToGrids(float x, float y, float z, float r) {
-        // Voxel Grid Baking: Update all affected chunks
-        float margin = r + 2.0f;
-        int minCX = (int)std::floor((x - margin) / 32.0f) * 32;
-        int maxCX = (int)std::floor((x + margin) / 32.0f) * 32;
-        int minCY = (int)std::floor((y - margin) / 32.0f) * 32;
-        int maxCY = (int)std::floor((y + margin) / 32.0f) * 32;
-        int minCZ = (int)std::floor((z - margin) / 32.0f) * 32;
-        int maxCZ = (int)std::floor((z + margin) / 32.0f) * 32;
-
-        for (int cx = minCX; cx <= maxCX; cx += 32) {
-            for (int cy = minCY; cy <= maxCY; cy += 32) {
-                for (int cz = minCZ; cz <= maxCZ; cz += 32) {
-                    uint64_t key = state.sdfEngine.getChunkKey(cx, cy, cz);
-                    ChunkGrid* gridPtr = nullptr;
-                    auto it = state.sdfEngine.voxelGrids.find(key);
-                    if (it == state.sdfEngine.voxelGrids.end()) {
-                        gridPtr = new ChunkGrid();
-                        state.sdfEngine.voxelGrids[key] = gridPtr;
-                    } else {
-                        gridPtr = it->second;
-                    }
-                    ChunkGrid& grid = *gridPtr;
-                    
-                    if (!grid.initialized) {
-                        // Initialize grid from base SDF
-                        for (int gz = 0; gz < 33; gz++) {
-                            for (int gy = 0; gy < 33; gy++) {
-                                for (int gx = 0; gx < 33; gx++) {
-                                    vec3 p((float)cx + gx, (float)cy + gy, (float)cz + gz);
-                                    vec2 res = state.sdfEngine.map(p, state.liftY, 0.0f);
-                                    int gidx = gx + gy * 33 + gz * 33 * 33;
-                                    grid.data[gidx] = res.x;
-                                    grid.mats[gidx] = res.y;
-                                }
-                            }
-                        }
-                        grid.initialized = true;
-                    }
-
-                    // Apply the hole to the grid with optimized bounding box
-                    int startGX = std::max(0, (int)std::floor(x - r - (float)cx));
-                    int endGX = std::min(32, (int)std::ceil(x + r - (float)cx));
-                    int startGY = std::max(0, (int)std::floor(y - r - (float)cy));
-                    int endGY = std::min(32, (int)std::ceil(y + r - (float)cy));
-                    int startGZ = std::max(0, (int)std::floor(z - r - (float)cz));
-                    int endGZ = std::min(32, (int)std::ceil(z + r - (float)cz));
-                    
-                    for (int gz = startGZ; gz <= endGZ; gz++) {
-                        for (int gy = startGY; gy <= endGY; gy++) {
-                            for (int gx = startGX; gx <= endGX; gx++) {
-                                vec3 p((float)cx + gx, (float)cy + gy, (float)cz + gz);
-                                float dx = p.x - x;
-                                float dy = p.y - y;
-                                float dz = p.z - z;
-                                float d = std::sqrt(dx*dx + dy*dy + dz*dz) - r;
-                                int gidx = gx + gy * 33 + gz * 33 * 33;
-                                
-                                float holeSDF = -d;
-                                if (holeSDF > grid.data[gidx]) {
-                                    grid.data[gidx] = holeSDF;
-                                    if (grid.mats[gidx] != 0.0f) grid.mats[gidx] += 100.0f;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     void addHole(float x, float y, float z, float r) {
@@ -180,18 +111,16 @@ public:
             state.sdfEngine.numHoles++;
         }
 
-        applyHoleToGrids(x, y, z, r);
+        state.sdfEngine.digVoxel(vec3(x, y, z), r);
     }
 
     val doDig(float dirX, float dirY, float dirZ) {
         int oldIndex = state.sdfEngine.holeIndex;
         state.tryDig(vec3(dirX, dirY, dirZ));
         if (state.sdfEngine.holeIndex != oldIndex) {
-            // A hole was added! It's at the previous index
             int addedIndex = oldIndex;
             HoleStruct& h = state.sdfEngine.holes[addedIndex];
-            applyHoleToGrids(h.x, h.y, h.z, h.r); // BAKE IT!
-
+            // Voxel dig is already called inside state.tryDig -> sdfEngine.digVoxel
             val obj = val::object();
             obj.set("x", h.x);
             obj.set("y", h.y);
@@ -209,75 +138,41 @@ public:
         return obj;
     }
 
-    MeshResult generateChunkMesh(float cx, float cy, float cz, int gridSize) {
-        float SPACING = 1.0f; // Smoothed spacing
+    MeshResult generateChunkMesh(float cx, float cy, float cz, int gridSize, int lod) {
+        float SPACING = (float)(1 << lod); 
         
-        uint64_t key = state.sdfEngine.getChunkKey((int)cx, (int)cy, (int)cz);
-        ChunkGrid* gridPtr = nullptr;
-        auto it = state.sdfEngine.voxelGrids.find(key);
-        if (it == state.sdfEngine.voxelGrids.end()) {
-            gridPtr = new ChunkGrid();
-            state.sdfEngine.voxelGrids[key] = gridPtr;
-        } else {
-            gridPtr = it->second;
-        }
-        ChunkGrid& grid = *gridPtr;
+        // Use a local buffer for LOD data to avoid polluting the high-detail voxel cache
+        // which is strictly 32x32x32 at 1.0 resolution.
+        std::vector<float> lodData(gridSize * gridSize * gridSize);
+        std::vector<float> lodMats(gridSize * gridSize * gridSize);
 
-        if (!grid.initialized) {
-            // 1. Initialize from base terrain
-            for (int z = 0; z < gridSize; z++) {
-                for (int y = 0; y < gridSize; y++) {
-                    for (int x = 0; x < gridSize; x++) {
-                        vec3 p(cx + x * SPACING, cy + y * SPACING, cz + z * SPACING);
-                        vec2 res = state.sdfEngine.map(p, state.liftY, 0.0f);
-                        int idx = x + y * gridSize + z * gridSize * gridSize;
-                        grid.data[idx] = res.x;
-                        grid.mats[idx] = res.y;
-                    }
-                }
-            }
-            
-            // 2. Apply all historical holes that affect this chunk
-            for (int i = 0; i < state.sdfEngine.numHoles; i++) {
-                const HoleStruct& h = state.sdfEngine.holes[i];
-                float r = h.r;
-                float margin = r + 2.0f;
-                
-                // Chunk bounding box check
-                if (h.x + margin < cx || h.x - margin > cx + 32.0f ||
-                    h.y + margin < cy || h.y - margin > cy + 32.0f ||
-                    h.z + margin < cz || h.z - margin > cz + 32.0f) {
-                    continue;
-                }
-                
-                // Bake this hole into the current grid
-                int startGX = std::max(0, (int)std::floor(h.x - r - cx));
-                int endGX = std::min(32, (int)std::ceil(h.x + r - cx));
-                int startGY = std::max(0, (int)std::floor(h.y - r - cy));
-                int endGY = std::min(32, (int)std::ceil(h.y + r - cy));
-                int startGZ = std::max(0, (int)std::floor(h.z - r - cz));
-                int endGZ = std::min(32, (int)std::ceil(h.z + r - cz));
-                
-                for (int gz = startGZ; gz <= endGZ; gz++) {
-                    for (int gy = startGY; gy <= endGY; gy++) {
-                        for (int gx = startGX; gx <= endGX; gx++) {
-                            vec3 p(cx + (float)gx, cy + (float)gy, cz + (float)gz);
-                            float dx = p.x - h.x;
-                            float dy = p.y - h.y;
-                            float dz = p.z - h.z;
-                            float d = std::sqrt(dx*dx + dy*dy + dz*dz) - r;
-                            int gidx = gx + gy * 33 + gz * 33 * 33;
-                            
-                            float holeSDF = -d;
-                            if (holeSDF > grid.data[gidx]) {
-                                grid.data[gidx] = holeSDF;
-                                if (grid.mats[gidx] != 0.0f) grid.mats[gidx] += 100.0f;
-                            }
+        for (int z = 0; z < gridSize; z++) {
+            for (int y = 0; y < gridSize; y++) {
+                for (int x = 0; x < gridSize; x++) {
+                    int px = (int)cx + x * (int)SPACING;
+                    int py = (int)cy + y * (int)SPACING;
+                    int pz = (int)cz + z * (int)SPACING;
+                    
+                    float d = state.sdfEngine.getVoxelData(px, py, pz);
+                    float m = 1.0f; // Default rock
+                    
+                    if (d < -999999.0f) {
+                        vec3 p((float)px, (float)py, (float)pz);
+                        d = state.sdfEngine.sdTerrain(p);
+                        m = state.sdfEngine.getTerrainMat(p);
+                    } else {
+                        m = state.sdfEngine.getVoxelMat(px, py, pz);
+                        if (m < 0.0f) {
+                            vec3 p((float)px, (float)py, (float)pz);
+                            m = state.sdfEngine.getTerrainMat(p);
                         }
                     }
+                    
+                    int idx = x + y * gridSize + z * gridSize * gridSize;
+                    lodData[idx] = d;
+                    lodMats[idx] = m;
                 }
             }
-            grid.initialized = true;
         }
 
         std::vector<float> vertices;
@@ -286,26 +181,9 @@ public:
         std::vector<uint32_t> indices;
 
         auto getIdx = [&](int x, int y, int z) { return x + y * gridSize + z * gridSize * gridSize; };
-
-        auto getNormal = [&](int x, int y, int z) {
-            float nx = grid.data[getIdx(std::min(x+1, gridSize-1), y, z)] - grid.data[getIdx(std::max(x-1, 0), y, z)];
-            float ny = grid.data[getIdx(x, std::min(y+1, gridSize-1), z)] - grid.data[getIdx(x, std::max(y-1, 0), z)];
-            float nz = grid.data[getIdx(x, y, std::min(z+1, gridSize-1))] - grid.data[getIdx(x, y, std::max(z-1, 0))];
-            float len = std::sqrt(nx*nx + ny*ny + nz*nz);
-            if (len > 0.0001f) { nx /= len; ny /= len; nz /= len; }
-            return vec3(nx, ny, nz);
-        };
         
         auto getColor = [&](float m) {
-            if (m == 1.0f) return vec3(0.5f, 0.5f, 0.5f); // rock
-            if (m == 2.0f) return vec3(0.8f, 0.8f, 0.5f); // sand
-            if (m == 3.0f) return vec3(0.3f, 0.8f, 0.3f); // grass
-            if (m == 4.0f) return vec3(0.4f, 0.2f, 0.1f); // wood
-            if (m == 5.0f) return vec3(0.8f, 0.8f, 0.8f); // metal
-            if (m == 6.0f) return vec3(1.0f, 0.3f, 0.5f); // sakura
-            if (m == 7.0f) return vec3(0.8f, 0.9f, 1.0f); // glass/ice
-            if (m == 8.0f) return vec3(0.2f, 0.4f, 0.8f); // water
-            return vec3(0.5f, 0.5f, 0.5f);
+            return vec3(m, 0.0f, 0.0f); // Pass material ID in the R component
         };
 
         vec3 cornerOffsets[8] = {
@@ -320,7 +198,6 @@ public:
 
         std::unordered_map<uint64_t, uint32_t> edgeToVertex;
 
-        // 2. Цикл обхода 3D-пространства чанка (скелет Marching Cubes)
         for (int z = 0; z < gridSize - 1; z++) {
             for (int y = 0; y < gridSize - 1; y++) {
                 for (int x = 0; x < gridSize - 1; x++) {
@@ -329,8 +206,8 @@ public:
                     int cubeIndex = 0;
                     for (int i = 0; i < 8; i++) {
                         int idx = getIdx(x + int(cornerOffsets[i].x), y + int(cornerOffsets[i].y), z + int(cornerOffsets[i].z));
-                        val[i] = grid.data[idx];
-                        m[i] = grid.mats[idx];
+                        val[i] = lodData[idx];
+                        m[i] = lodMats[idx];
                         if (val[i] < 0.0f) cubeIndex |= (1 << i);
                     }
                     
@@ -365,11 +242,12 @@ public:
                                 vec3 p1(cx + vx1 * SPACING, cy + vy1 * SPACING, cz + vz1 * SPACING);
                                 vec3 p = p0 + (p1 - p0) * t;
                                 
-                                // Global seamless normal calculation
-                                float eps = 0.05f;
-                                float nx = state.sdfEngine.map(vec3(p.x + eps, p.y, p.z), state.liftY, 0.0f).x - state.sdfEngine.map(vec3(p.x - eps, p.y, p.z), state.liftY, 0.0f).x;
-                                float ny = state.sdfEngine.map(vec3(p.x, p.y + eps, p.z), state.liftY, 0.0f).x - state.sdfEngine.map(vec3(p.x, p.y - eps, p.z), state.liftY, 0.0f).x;
-                                float nz = state.sdfEngine.map(vec3(p.x, p.y, p.z + eps), state.liftY, 0.0f).x - state.sdfEngine.map(vec3(p.x, p.y, p.z - eps), state.liftY, 0.0f).x;
+                                // Simplified normal for LOD
+                                float eps = 0.1f * SPACING;
+                                float nx = lodData[getIdx(std::min(vx0+1, gridSize-1), vy0, vz0)] - lodData[getIdx(std::max(vx0-1, 0), vy0, vz0)];
+                                float ny = lodData[getIdx(vx0, std::min(vy0+1, gridSize-1), vz0)] - lodData[getIdx(vx0, std::max(vy0-1, 0), vz0)];
+                                float nz = lodData[getIdx(vx0, vy0, std::min(vz0+1, gridSize-1))] - lodData[getIdx(vx0, vy0, std::max(vz0-1, 0))];
+
                                 vec3 norm(nx, ny, nz);
                                 float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);
                                 if (nLen > 0.0001f) { norm.x /= nLen; norm.y /= nLen; norm.z /= nLen; }
@@ -404,17 +282,26 @@ public:
             }
         }
 
-        // Подготавливаем типизированные массивы для возврата в JS
-        val jsVertices = val::global("Float32Array").new_(typed_memory_view(vertices.size(), vertices.data()));
-        val jsNormals = val::global("Float32Array").new_(typed_memory_view(normals.size(), normals.data()));
-        val jsColors = val::global("Float32Array").new_(typed_memory_view(colors.size(), colors.data()));
-        val jsIndices = val::global("Uint32Array").new_(typed_memory_view(indices.size(), indices.data()));
+        // Подготавливаем типизированные массивы для возврата в JS (обязательное копирование через slice)
+        val jsVertices = vertices.empty() ? val::global("Float32Array").new_(0) : val::global("Float32Array").new_(typed_memory_view(vertices.size(), vertices.data())).call<val>("slice");
+        val jsNormals = normals.empty() ? val::global("Float32Array").new_(0) : val::global("Float32Array").new_(typed_memory_view(normals.size(), normals.data())).call<val>("slice");
+        
+        // Квантуем материалы до целых чисел 1-8
+        for (size_t i = 0; i < colors.size(); i += 3) {
+            float m = colors[i];
+            float finalM = std::max(1.0f, std::min(8.0f, std::floor(m + 0.5f)));
+            colors[i] = finalM;
+            colors[i+1] = finalM;
+            colors[i+2] = finalM;
+        }
+        val jsColors = colors.empty() ? val::global("Float32Array").new_(0) : val::global("Float32Array").new_(typed_memory_view(colors.size(), colors.data())).call<val>("slice");
+        val jsIndices = indices.empty() ? val::global("Uint32Array").new_(0) : val::global("Uint32Array").new_(typed_memory_view(indices.size(), indices.data())).call<val>("slice");
 
         MeshResult result;
-        result.vertices = val::global("Float32Array").new_(jsVertices);
-        result.normals = val::global("Float32Array").new_(jsNormals);
-        result.colors = val::global("Float32Array").new_(jsColors);
-        result.indices = val::global("Uint32Array").new_(jsIndices);
+        result.vertices = jsVertices;
+        result.normals = jsNormals;
+        result.colors = jsColors;
+        result.indices = jsIndices;
         
         return result;
     }

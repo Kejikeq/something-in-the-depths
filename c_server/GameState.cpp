@@ -16,11 +16,10 @@ GameState::GameState() {
 }
 
 vec3 GameState::getNormal(vec3 p) {
-    const float eps = 0.01f;
-    float d = sdfEngine.map(p, liftY, uTime).x;
-    float nx = sdfEngine.map(vec3(p.x + eps, p.y, p.z), liftY, uTime).x - d;
-    float ny = sdfEngine.map(vec3(p.x, p.y + eps, p.z), liftY, uTime).x - d;
-    float nz = sdfEngine.map(vec3(p.x, p.y, p.z + eps), liftY, uTime).x - d;
+    const float eps = 0.05f;
+    float nx = sdfEngine.map(vec3(p.x + eps, p.y, p.z), liftY, uTime).x - sdfEngine.map(vec3(p.x - eps, p.y, p.z), liftY, uTime).x;
+    float ny = sdfEngine.map(vec3(p.x, p.y + eps, p.z), liftY, uTime).x - sdfEngine.map(vec3(p.x, p.y - eps, p.z), liftY, uTime).x;
+    float nz = sdfEngine.map(vec3(p.x, p.y, p.z + eps), liftY, uTime).x - sdfEngine.map(vec3(p.x, p.y, p.z - eps), liftY, uTime).x;
     float len = std::sqrt(nx*nx + ny*ny + nz*nz);
     if (len < 0.0001f) return vec3(0.0f, 1.0f, 0.0f);
     return vec3(nx/len, ny/len, nz/len);
@@ -176,71 +175,34 @@ void GameState::applyCollision(float dt) {
 }
 
 void GameState::tryDig(vec3 camDir) {
-    // Digging Logic Using Analytical Intersection
-    std::vector<float> candidates;
-
-    // 1. Plane Intersections
-    float planes[] = {0.0f, -115.0f, -235.0f, -355.0f, -440.0f, -499.2f};
-    if (std::abs(camDir.y) > 0.001f) {
-        for (float py : planes) {
-            float t = (py - pos.y) / camDir.y;
-            if (t > 0.0f && t < 8.0f) candidates.push_back(t);
-        }
-    }
-
-    // 2. Exact Analytical Distances tracking down holes array
-    float tHole = sdfEngine.intersectHolesAnalytical(pos, camDir, 8.0f);
-    if (tHole < 8.0f) {
-        candidates.push_back(tHole);
-    }
-    
-    std::sort(candidates.begin(), candidates.end());
-
+    // Digging raymarch MUST ignore uLiftY to avoid hitting the "visual swelling" near player
+    float marchT = 0.2f; 
     bool hitFound = false;
     float hitX, hitY, hitZ;
 
-    for (float t : candidates) {
-        float px = pos.x + camDir.x * t;
-        float py = pos.y + camDir.y * t;
-        float pz = pos.z + camDir.z * t;
+    const float maxDigDist = 25.0f; // Increased range
+    const int maxSteps = 120; // More steps for precision
+    
+    for (int i = 0; i < maxSteps; i++) {
+        vec3 p = pos + camDir * marchT;
+        // CRITICAL: We use 0.0f for liftY here so we hit the ACTUAL terrain
+        float d = sdfEngine.map(p, 0.0f, uTime).x;
         
-        float dist = sdfEngine.map(vec3(px, py, pz), liftY, uTime).x;
-        if (dist < 0.2f) {
-            hitX = px; hitY = py; hitZ = pz;
+        if (d < 0.02f) { // Precise hit threshold
+            hitX = p.x; hitY = p.y; hitZ = p.z;
             hitFound = true;
             break;
         }
-    }
-
-    // Fallback Raymarching for edges
-    if (!hitFound) {
-        float marchT = 0.0f;
-        for (int i = 0; i < 4; i++) {
-            float px = pos.x + camDir.x * marchT;
-            float py = pos.y + camDir.y * marchT;
-            float pz = pos.z + camDir.z * marchT;
-            float dist = sdfEngine.map(vec3(px, py, pz), liftY, uTime).x;
-            if (dist < 0.2f) {
-                hitX = px; hitY = py; hitZ = pz;
-                hitFound = true;
-                break;
-            }
-            marchT += max_f(dist, 0.5f);
-            if (marchT > 8.0f) break;
-        }
+        
+        // Sphere tracing with safety factor for non-conservative terrain
+        // but ensure a minimum step to not get stuck
+        marchT += max_f(d * 0.85f, 0.1f);
+        
+        if (marchT > maxDigDist) break;
     }
 
     if (hitFound) {
-        // Update the circular buffer of 64 holes
-        int idx = sdfEngine.holeIndex;
-        sdfEngine.holes[idx].x = hitX;
-        sdfEngine.holes[idx].y = hitY;
-        sdfEngine.holes[idx].z = hitZ;
-        sdfEngine.holes[idx].r = 1.3f;
-        
-        sdfEngine.holeIndex = (sdfEngine.holeIndex + 1) % 2048;
-        if (sdfEngine.numHoles < 2048) {
-            sdfEngine.numHoles++;
-        }
+        // Physical voxel modification
+        sdfEngine.digVoxel(vec3(hitX, hitY, hitZ), 1.6f);
     }
 }
