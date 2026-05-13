@@ -85,34 +85,17 @@ void GameState::tick(float deltaTime, float moveX, float moveZ, bool jump) {
 }
 
 void GameState::applyCollision(float dt) {
-    // Horizontal Movement
+    if (vel.y < -30.0f) vel.y = -30.0f; // Terminal velocity
+    
+    // Preliminary Movement
     pos.x += vel.x * dt;
+    pos.y += vel.y * dt;
     pos.z += vel.z * dt;
     
-    // Wall Collisions
-    float collisionY = pos.y - 0.7f; // Check around waist
-    const float wallThreshold = 0.35f; // Slightly smaller to prevent sticking
-    for (int i = 0; i < 8; i++) { // Increased iterations for stability
-        float dist = sdfEngine.map(vec3(pos.x, collisionY, pos.z), liftY, uTime).x;
-        if (dist < wallThreshold) {
-            vec3 n = getNormal(vec3(pos.x, collisionY, pos.z));
-            pos.x += n.x * (wallThreshold - dist) * 1.2f; // Increased push-out factor
-            pos.z += n.z * (wallThreshold - dist) * 1.2f;
-        } else {
-            break; // Early exit if no collision
-        }
-    }
-    
-    // Vertical Movement
-    if (vel.y < -30.0f) vel.y = -30.0f; // Terminal velocity
-    pos.y += vel.y * dt;
-    
     bool inHole = (28.0f - std::sqrt(pos.x*pos.x + pos.z*pos.z)) > 0.0f;
-    
     float liftHover = std::sin(uTime * 0.4f) * 0.08f;
     float expected_y = -0.4f + liftY + liftHover + 0.12f;
     float liftRadius = 2.2f;
-    // Строгая проверка по оси Y (расстояние до платформы меньше 5.0f), чтобы лифт не хватал игрока со дна
     bool onLift = (std::abs(pos.x) < liftRadius && std::abs(pos.z - 2.5f) < liftRadius && std::abs(pos.y - expected_y) < 5.0f);
     
     float min_y = -499.2f;
@@ -125,18 +108,53 @@ void GameState::applyCollision(float dt) {
         else if (pos.y - PLAYER_HEIGHT >= -440.0f) min_y = -440.0f;
         else min_y = -499.2f;
     }
-    
+
     if (!inHole && !onLift) {
-        // Normal surface SDF collision
-        gDist = sdfEngine.map(vec3(pos.x, pos.y - PLAYER_HEIGHT, pos.z), liftY, uTime).x / 0.65f;
+        // Full 3D Capsule-like Collision
+        const float radius = 0.35f;
+        for (int i = 0; i < 4; i++) {
+            // Check feet
+            vec3 footPos = vec3(pos.x, pos.y - PLAYER_HEIGHT + radius, pos.z);
+            float distF = sdfEngine.map(footPos, liftY, uTime).x;
+            if (distF < radius) {
+                vec3 n = getNormal(footPos);
+                float pen = radius - distF;
+                pos.x += n.x * pen;
+                pos.y += n.y * pen;
+                pos.z += n.z * pen;
+                float vn = vel.x*n.x + vel.y*n.y + vel.z*n.z;
+                if (vn < 0.0f) {
+                    vel.x -= vn * n.x;
+                    vel.y -= vn * n.y;
+                    vel.z -= vn * n.z;
+                }
+            }
+            // Check waist
+            vec3 waistPos = vec3(pos.x, pos.y - 0.7f, pos.z);
+            float distW = sdfEngine.map(waistPos, liftY, uTime).x;
+            if (distW < radius) {
+                vec3 n = getNormal(waistPos);
+                float pen = radius - distW;
+                pos.x += n.x * pen;
+                pos.y += n.y * pen;
+                pos.z += n.z * pen;
+                float vn = vel.x*n.x + vel.y*n.y + vel.z*n.z;
+                if (vn < 0.0f) {
+                    vel.x -= vn * n.x;
+                    vel.y -= vn * n.y;
+                    vel.z -= vn * n.z;
+                }
+            }
+        }
         
-        if (gDist < -0.1f) { // More lenient snap threshold
-            pos.y += (-gDist + 0.02f);
-            if (vel.y < 0.0f) vel.y = 0.0f;
-        } else if (gDist < 0.05f) { // Tighter floor stick
-            float adjust = 0.05f - gDist;
-            if (vel.y <= 0.0f) {
-                pos.y += adjust;
+        // Ground sticking evaluation
+        gDist = sdfEngine.map(vec3(pos.x, pos.y - PLAYER_HEIGHT, pos.z), liftY, uTime).x;
+        // If we're very close to the ground and travelling down slowly, snap to prevent jittering
+        if (gDist < 0.05f && gDist > -0.1f && vel.y <= 0.01f) {
+            vec3 n = getNormal(vec3(pos.x, pos.y - PLAYER_HEIGHT, pos.z));
+            // Only snap if surface is somewhat flat
+            if (n.y > 0.5f) {
+                pos.y += (0.02f - gDist) * n.y;
                 vel.y = 0.0f;
             }
         }
@@ -220,8 +238,8 @@ void GameState::tryDig(vec3 camDir) {
         sdfEngine.holes[idx].z = hitZ;
         sdfEngine.holes[idx].r = 1.3f;
         
-        sdfEngine.holeIndex = (sdfEngine.holeIndex + 1) % 64;
-        if (sdfEngine.numHoles < 64) {
+        sdfEngine.holeIndex = (sdfEngine.holeIndex + 1) % 2048;
+        if (sdfEngine.numHoles < 2048) {
             sdfEngine.numHoles++;
         }
     }

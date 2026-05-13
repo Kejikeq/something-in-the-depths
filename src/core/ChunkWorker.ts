@@ -16,6 +16,8 @@ initWasmModule({
     console.error("Worker WASM load error:", err);
 });
 
+let activeHoles: any[] = [];
+
 self.onmessage = (e) => {
     const data = e.data;
     
@@ -28,17 +30,27 @@ self.onmessage = (e) => {
         }
 
         try {
-            const mesh = wasmCore.generateChunkMesh(cx, cy, cz, size);
+            const dims = size + 1;
+            const originX = cx * size;
+            const originY = cy * size;
+            const originZ = cz * size;
+            
+            // Removed the per-chunk filtering and addHole loop during GENERATE.
+            // Persistence is now handled within WASM's voxelGrids and holes history.
+
+            const mesh = wasmCore.generateChunkMesh(originX, originY, originZ, dims);
             
             if (!mesh.vertices || mesh.vertices.length === 0) {
                 self.postMessage({ type: 'RESULT', id, cx, cy, cz, empty: true });
                 return;
             }
             
-            const vertices = mesh.vertices;
-            const normals = mesh.normals;
-            const colors = mesh.colors;
-            const indices = mesh.indices;
+            // Ensure we copy the data out of the WASM heap! 
+            // If the Wasm returning `val` was a direct view, transferring it would detach the WASM memory buffer!
+            const vertices = new Float32Array(mesh.vertices);
+            const normals = new Float32Array(mesh.normals);
+            const colors = new Float32Array(mesh.colors);
+            const indices = new Uint32Array(mesh.indices);
             
             self.postMessage({
                 type: 'RESULT', id, cx, cy, cz,
@@ -50,23 +62,19 @@ self.onmessage = (e) => {
     } else if (data.type === 'SYNC_HOLES') {
         if (!wasmCore || !wasmModule) return;
         
-        if (data.holes) {
-            const floatArray = new Float32Array(data.holes);
-            const count = floatArray.length / 4;
-            
-            if (typeof wasmCore.syncHoles === 'function' && wasmModule._malloc) {
-                const numBytes = floatArray.byteLength;
-                const ptr = wasmModule._malloc(numBytes);
-                const heapBytes = new Uint8Array(wasmModule.HEAPU8.buffer, ptr, numBytes);
-                heapBytes.set(new Uint8Array(floatArray.buffer));
-                wasmCore.syncHoles(ptr, count);
-                wasmModule._free(ptr);
-            } else {
-                wasmCore.clearHoles();
-                for (let i = 0; i < count; i++) {
-                    wasmCore.addHole(floatArray[i*4], floatArray[i*4+1], floatArray[i*4+2], floatArray[i*4+3]);
+        try {
+            if (data.holes) {
+                // If the number of holes increased, add the new ones to the WASM grid persistence
+                if (data.holes.length > activeHoles.length) {
+                    for (let i = activeHoles.length; i < data.holes.length; i++) {
+                        const h = data.holes[i];
+                        wasmCore.addHole(h.x, h.y, h.z, h.r * 1.05 + 0.1);
+                    }
                 }
+                activeHoles = data.holes;
             }
+        } catch(err) {
+            console.error('Error syncing holes:', err);
         }
     }
 };

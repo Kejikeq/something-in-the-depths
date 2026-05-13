@@ -56,7 +56,7 @@ export class InputManager {
 
   private deadzone = 0.15;
 
-  constructor(private canvas: HTMLCanvasElement) {
+  constructor(private canvas?: HTMLCanvasElement) {
     this.boundKeyDown = (e) => {
       this.keys[e.code] = true;
       if (e.code === 'Space') this.triggers.jump = true;
@@ -67,7 +67,7 @@ export class InputManager {
       this.keys[e.code] = false;
     };
     this.boundClick = () => {
-      if (!this.pointerLocked) this.canvas.requestPointerLock();
+      if (!this.pointerLocked && this.canvas) this.canvas.requestPointerLock();
     };
     this.boundPointerLockChange = () => {
       this.pointerLocked = document.pointerLockElement === this.canvas;
@@ -136,6 +136,18 @@ export class InputManager {
       if (this.gamepadIndex === e.gamepad.index) this.gamepadIndex = null;
     };
 
+    if (this.canvas) {
+      this.initializeListeners();
+    }
+  }
+
+  public setCanvas(canvas: HTMLCanvasElement) {
+    if (this.canvas) this.dispose();
+    this.canvas = canvas;
+    this.initializeListeners();
+  }
+
+  private initializeListeners() {
     this.initKeyboard();
     this.initMouse();
     this.initTouch();
@@ -189,11 +201,11 @@ export class InputManager {
       moveY: 0,
       lookX: this.mouseDeltaX,
       lookY: this.mouseDeltaY,
-      jump: this.triggers.jump,
-      action: this.triggers.action,
+      jump: this.triggers.jump || this.keys['Space'],
+      action: this.triggers.action || this.keys['Mouse0'],
       secondaryAction: false,
-      toggleLight: this.triggers.toggleLight,
-      interact: this.triggers.interact,
+      toggleLight: this.triggers.toggleLight || this.keys['KeyF'],
+      interact: this.triggers.interact || this.keys['KeyE'],
     };
 
     // Reset deltas and triggers

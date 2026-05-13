@@ -3,6 +3,9 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <unordered_map>
+#include <cstdint>
+#include <vector>
 
 // Vector Math primitives equivalent to GLSL
 struct vec2 {
@@ -45,11 +48,27 @@ struct HoleStruct {
     float x, y, z, r;
 };
 
+struct ChunkGrid {
+    float data[33 * 33 * 33]; // Density grid
+    float mats[33 * 33 * 33]; // Material grid
+    bool initialized = false;
+};
+
 class SDFEngine {
 public:
-    HoleStruct holes[64];
+    HoleStruct holes[2048];
     int numHoles = 0;
     int holeIndex = 0;
+    
+    std::unordered_map<uint64_t, ChunkGrid> voxelGrids;
+
+    uint64_t getChunkKey(int x, int y, int z) {
+        // Correct chunk rounding for both positive and negative coords
+        int cx = (x >= 0) ? (x / 32) : ((x - 31) / 32);
+        int cy = (y >= 0) ? (y / 32) : ((y - 31) / 32);
+        int cz = (z >= 0) ? (z / 32) : ((z - 31) / 32);
+        return ((uint64_t)(cx & 0xFFFFF)) | (((uint64_t)(cy & 0xFFFFF)) << 20) | (((uint64_t)(cz & 0xFFFFF)) << 40);
+    }
 
     // Base Modifiers
     float sdCylinder(vec3 p, float r, float h);
@@ -70,7 +89,7 @@ public:
     
     float getDistance(vec3 p) {
         float maxInside = -1000.0f;
-        for (int i = 0; i < numHoles && i < 64; ++i) {
+        for (int i = 0; i < numHoles && i < 2048; ++i) {
             float dx = p.x - holes[i].x;
             float dz = p.z - holes[i].z;
             float d2d = std::sqrt(dx*dx + dz*dz);

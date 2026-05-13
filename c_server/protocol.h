@@ -43,7 +43,7 @@ typedef struct {
 #define MAX_CLIENTS 1024
 #define SERVER_PORT 3000
 #define ZONE_SIZE 50
-#define MAX_HOLES 64
+#define MAX_HOLES 2048
 #define MAX_ROOM_PLAYERS 128
 
 typedef struct Room {

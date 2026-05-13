@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import { VolumeX, Volume2, Settings } from 'lucide-react';
+import { EngineContext } from '../../core/EngineContext';
+import { vec3 } from '../../core/VoxelEngine';
 
 interface MainMenuProps {
+  ctx: EngineContext;
   gameState: 'menu' | 'playing';
   setGameState: (state: 'menu' | 'playing') => void;
   roomId: string;
@@ -10,22 +13,16 @@ interface MainMenuProps {
   setNickname: (nick: string) => void;
   isMuted: boolean;
   setIsMuted: React.Dispatch<React.SetStateAction<boolean>>;
-  audioManager: any;
   setIsAuthenticating: (auth: boolean) => void;
   setAuthError: (error: string | null) => void;
   authError: string | null;
-  camPos: React.MutableRefObject<any>;
   lastSafePos: React.MutableRefObject<any>;
-  yaw: React.MutableRefObject<number>;
-  pitch: React.MutableRefObject<number>;
-  velocity: React.MutableRefObject<any>;
   setHasWon: (won: boolean) => void;
   hasWonRef: React.MutableRefObject<boolean>;
   setNearSign: (n: boolean) => void;
   nearSignRef: React.MutableRefObject<boolean>;
   setNearLift: (l: boolean) => void;
   nearLiftRef: React.MutableRefObject<boolean>;
-  networkClient: any;
   stats: any;
   renderScale: number;
   setRenderScale: (scale: number) => void;
@@ -34,11 +31,11 @@ interface MainMenuProps {
 }
 
 export function MainMenu({
-  gameState, setGameState, roomId, setRoomId, nickname, setNickname,
-  isMuted, setIsMuted, audioManager, setIsAuthenticating, setAuthError, authError,
-  camPos, lastSafePos, yaw, pitch, velocity,
+  ctx, gameState, setGameState, roomId, setRoomId, nickname, setNickname,
+  isMuted, setIsMuted, setIsAuthenticating, setAuthError, authError,
+  lastSafePos,
   setHasWon, hasWonRef, setNearSign, nearSignRef, setNearLift, nearLiftRef,
-  networkClient, stats, renderScale, setRenderScale,
+  stats, renderScale, setRenderScale,
   tripleBuffering, setTripleBuffering
 }: MainMenuProps) {
   const [showSettings, setShowSettings] = useState(false);
@@ -57,8 +54,8 @@ export function MainMenu({
         <button 
           onClick={() => {
             setIsMuted((m: boolean) => !m);
-            audioManager.current.init();
-            audioManager.current.resume();
+            ctx.audio.init();
+            ctx.audio.resume();
           }} 
           className="p-2 rounded-lg bg-black/40 border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20 transition-all pointer-events-auto"
         >
@@ -124,11 +121,11 @@ export function MainMenu({
               setAuthError(null);
               const spawnX = 0, spawnZ = 66;
               const groundY = 0;
-              camPos.current = { x: spawnX, y: groundY + 1.5, z: spawnZ };
+              ctx.player.pos = new vec3(spawnX, groundY + 1.5, spawnZ);
               lastSafePos.current = { x: spawnX, y: groundY + 1.5, z: spawnZ };
-              yaw.current = 3.14;
-              pitch.current = -0.1;
-              velocity.current = { x: 0, y: 0, z: 0 };
+              ctx.player.yaw = 3.14;
+              ctx.player.pitch = -0.1;
+              ctx.player.vel = new vec3(0, 0, 0);
               setHasWon(false);
               hasWonRef.current = false;
               setNearSign(false);
@@ -137,7 +134,7 @@ export function MainMenu({
               nearLiftRef.current = false;
               setGameState('playing');
               setTimeout(() => {
-                  networkClient.current.connect(id, nickname, true); // Create allowed
+                  ctx.network.connect(id, nickname, true); // Create allowed
               }, 100);
             }}
             className="w-full py-4 bg-emerald-500 text-black font-mono font-bold tracking-[0.2em] hover:bg-emerald-400 active:scale-[0.98] transition-all uppercase outline-none shadow-[0_0_20px_rgba(16,185,129,0.3)] text-sm"
@@ -168,11 +165,11 @@ export function MainMenu({
                         setAuthError(null);
                         const spawnX = 0, spawnZ = 66;
                         const groundY = 0;
-                        camPos.current = { x: spawnX, y: groundY + 1.5, z: spawnZ };
+                        ctx.player.pos = new vec3(spawnX, groundY + 1.5, spawnZ);
                         lastSafePos.current = { x: spawnX, y: groundY + 1.5, z: spawnZ };
-                        yaw.current = 3.14;
-                        pitch.current = -0.1;
-                        velocity.current = { x: 0, y: 0, z: 0 };
+                        ctx.player.yaw = 3.14;
+                        ctx.player.pitch = -0.1;
+                        ctx.player.vel = new vec3(0, 0, 0);
                         setHasWon(false);
                         hasWonRef.current = false;
                         setNearSign(false);
@@ -181,7 +178,7 @@ export function MainMenu({
                         nearLiftRef.current = false;
                         setGameState('playing');
                         setTimeout(() => {
-                            networkClient.current.connect(roomId, nickname, false); // Create NOT allowed
+                            ctx.network.connect(roomId, nickname, false); // Create NOT allowed
                         }, 50);
                     }
                 }}

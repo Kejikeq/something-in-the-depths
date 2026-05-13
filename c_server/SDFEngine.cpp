@@ -211,28 +211,59 @@ vec2 SDFEngine::map(vec3 p, float uLiftY, float uTime) {
     }
     if (treeRes.y < res.x) res = vec2(treeRes.y, 2.0f);
 
-    // Embed hole modifications dynamically
-    if (numHoles > 0) {
-        float minHoleDist = 1000.0f;
-        for (int i = 0; i < numHoles && i < 64; ++i) {
-            vec3 hPoint = vec3(holes[i].x, holes[i].y, holes[i].z);
-            float d = length(p - hPoint) - holes[i].r;
-            minHoleDist = min_f(minHoleDist, d);
-        }
+    float baseDist = res.x;
+    float matID = res.y;
+
+    // Check voxel grids for modifications
+    uint64_t key = getChunkKey((int)std::floor(p.x), (int)std::floor(p.y), (int)std::floor(p.z));
+    auto it = voxelGrids.find(key);
+    if (it != voxelGrids.end()) {
+        const ChunkGrid& grid = it->second;
+        // Local grid coords
+        int gx = (int)std::floor(p.x) % 32; if (gx < 0) gx += 32;
+        int gy = (int)std::floor(p.y) % 32; if (gy < 0) gy += 32;
+        int gz = (int)std::floor(p.z) % 32; if (gz < 0) gz += 32;
+        int gidx = gx + gy * 33 + gz * 33 * 33;
         
-        if (minHoleDist < 2.0f) {
-            vec3 hp = p * 12.0f;
-            float jagged = (std::sin(hp.x)*std::cos(hp.y) + std::sin(hp.y)*std::cos(hp.z) + std::sin(hp.z)*std::cos(hp.x)) * 0.1f;
-            float distHole = minHoleDist + jagged;
-            
-            float val = -distHole;
-            if (val > res.x) {
-                res.x = val;
-                // Encode modified terrain material
-                if (res.y < 100.0f) res.y += 100.0f;
-            }
+        float voxelDist = grid.data[gidx];
+        
+        // Trilinear Interpolation for smoother results
+        float fx = p.x - std::floor(p.x);
+        float fy = p.y - std::floor(p.y);
+        float fz = p.z - std::floor(p.z);
+        
+        auto getGridVal = [&](int ox, int oy, int oz) {
+            int ix = (gx + ox) % 33;
+            int iy = (gy + oy) % 33;
+            int iz = (gz + oz) % 33;
+            return grid.data[ix + iy * 33 + iz * 33 * 33];
+        };
+        
+        float v000 = getGridVal(0, 0, 0);
+        float v100 = getGridVal(1, 0, 0);
+        float v010 = getGridVal(0, 1, 0);
+        float v110 = getGridVal(1, 1, 0);
+        float v001 = getGridVal(0, 0, 1);
+        float v101 = getGridVal(1, 0, 1);
+        float v011 = getGridVal(0, 1, 1);
+        float v111 = getGridVal(1, 1, 1);
+        
+        // Actually, let's do it properly
+        float c00 = v000 * (1.0f - fx) + v100 * fx;
+        float c01 = v001 * (1.0f - fx) + v101 * fx;
+        float c10 = v010 * (1.0f - fx) + v110 * fx;
+        float c11 = v011 * (1.0f - fx) + v111 * fx;
+        
+        float c0 = c00 * (1.0f - fy) + c10 * fy;
+        float c1 = c01 * (1.0f - fy) + c11 * fy;
+        
+        float finalVoxelDist = c0 * (1.0f - fz) + c1 * fz;
+
+        if (finalVoxelDist > baseDist) {
+            baseDist = finalVoxelDist;
+            matID = grid.mats[gidx];
         }
     }
 
-    return vec2(res.x * 0.65f, res.y);
+    return vec2(baseDist * 0.65f, matID);
 }

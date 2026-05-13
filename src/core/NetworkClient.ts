@@ -308,6 +308,22 @@ export class NetworkClient {
       }
   }
 
+  public isConnected() {
+    return this.socket !== null && this.socket.readyState === WebSocket.OPEN && this.initReceived;
+  }
+
+  public get isConnecting() {
+    return this.socket !== null && this.socket.readyState === WebSocket.CONNECTING;
+  }
+
+  public broadcastPosition() {
+    if (!this.wasmCore) return;
+    const state = this.wasmCore.getPlayerState();
+    if (state) {
+        this.broadcastMove(state.x, state.y, state.z);
+    }
+  }
+
   public broadcastMove(x: number, y: number, z: number) {
     if (this.socket?.readyState === WebSocket.OPEN) {
         // Binary Format: [Type: 1 byte (104 for 'move'), x: float32, y: float32, z: float32]

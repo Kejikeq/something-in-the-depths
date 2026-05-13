@@ -1,6 +1,7 @@
-import { WorldEngine } from './WorldEngine';
+import { WORLD_CONFIG } from './VoxelEngine';
 import { ChunkRenderer } from './ChunkRenderer';
 import { ParticleRenderer } from './ParticleRenderer';
+import { SkyRenderer } from './SkyRenderer';
 import { createPerspective, createLookAt, multiplyMatrices } from './mathUtils';
 
 export interface RenderState {
@@ -42,6 +43,7 @@ export class WebGLRenderer {
 
   private chunkRenderer: ChunkRenderer;
   public particleRenderer: ParticleRenderer;
+  private skyRenderer: SkyRenderer;
   private wasmCore: any = null;
   private _lastTime: number = 0;
 
@@ -51,6 +53,7 @@ export class WebGLRenderer {
     if (!gl) throw new Error("WebGL not supported");
     this.gl = gl;
 
+    this.skyRenderer = new SkyRenderer(gl);
     this.chunkRenderer = new ChunkRenderer(gl);
     this.particleRenderer = new ParticleRenderer(gl);
 
@@ -67,9 +70,9 @@ export class WebGLRenderer {
       return shader;
     };
     
-    // WorldEngine.SHADERS.vertex is just a standard pass-through quad shader used for the post process
-    const vs = compileShader(gl.VERTEX_SHADER, WorldEngine.SHADERS.vertex);
-    const pfs = compileShader(gl.FRAGMENT_SHADER, WorldEngine.SHADERS.postProcess);
+    // WORLD_CONFIG.SHADERS.vertex is just a standard pass-through quad shader used for the post process
+    const vs = compileShader(gl.VERTEX_SHADER, WORLD_CONFIG.SHADERS.vertex);
+    const pfs = compileShader(gl.FRAGMENT_SHADER, WORLD_CONFIG.SHADERS.postProcess);
     
     // Post Process Program
     const postProgram = gl.createProgram();
@@ -91,20 +94,10 @@ export class WebGLRenderer {
 
     const uScene = gl.getUniformLocation(this.postProgram, "uScene");
     const uResolution = gl.getUniformLocation(this.postProgram, "uResolution");
-    const uTime = gl.getUniformLocation(this.postProgram, "uTime");
-    const uCamPos = gl.getUniformLocation(this.postProgram, "uCamPos");
-    const uCamDir = gl.getUniformLocation(this.postProgram, "uCamDir");
-    const uCamUp = gl.getUniformLocation(this.postProgram, "uCamUp");
-    const uCamRight = gl.getUniformLocation(this.postProgram, "uCamRight");
 
     this.postUniforms = {
       scene: uScene,
       res: uResolution,
-      time: uTime,
-      camPos: uCamPos,
-      camDir: uCamDir,
-      camUp: uCamUp,
-      camRight: uCamRight,
       perfMode: gl.getUniformLocation(postProgram, "uPerfMode")
     };
 
@@ -159,8 +152,17 @@ export class WebGLRenderer {
 
     // Pass 1: Render Scene to FBO
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
-    gl.clearColor(0.0, 0.0, 0.0, 0.0); // Transparent to allow sky to show through
+    gl.clearColor(0.0, 0.0, 0.0, 0.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    
+    // Scale FOV so it perfectly matches the standard 80 degree vertical FOV used in createPerspective.
+    // uFovScale = 2 * tan(80 / 2) = 1.678199
+    this.skyRenderer.render(
+      state.camDirX, state.camDirY, state.camDirZ,
+      state.camUpX, state.camUpY, state.camUpZ,
+      state.camRightX, state.camRightY, state.camRightZ,
+      state.time, 1.678199
+    );
 
     const aspect = gl.canvas.width / gl.canvas.height;
     const proj = createPerspective(80 * Math.PI / 180, aspect, 0.1, 1000.0);
@@ -204,13 +206,6 @@ export class WebGLRenderer {
     gl.uniform1i(this.postUniforms.scene, 0);
     gl.uniform2f(this.postUniforms.res, gl.canvas.width, gl.canvas.height);
     gl.uniform1i(this.postUniforms.perfMode, state.performanceMode);
-    
-    // Pass sky variables
-    if (this.postUniforms.time) gl.uniform1f(this.postUniforms.time, state.time);
-    if (this.postUniforms.camPos) gl.uniform3f(this.postUniforms.camPos, state.camPos.x, state.camPos.y, state.camPos.z);
-    if (this.postUniforms.camDir) gl.uniform3f(this.postUniforms.camDir, state.camDirX, state.camDirY, state.camDirZ);
-    if (this.postUniforms.camUp) gl.uniform3f(this.postUniforms.camUp, state.camUpX, state.camUpY, state.camUpZ);
-    if (this.postUniforms.camRight) gl.uniform3f(this.postUniforms.camRight, state.camRightX, state.camRightY, state.camRightZ);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }

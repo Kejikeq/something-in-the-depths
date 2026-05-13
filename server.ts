@@ -30,7 +30,7 @@ const PLAYER_COLORS = [
 
 class Room {
   public id: string;
-  public holes: any[] = new Array(64).fill(null);
+  public holes: any[] = new Array(2048).fill(null);
   public holeCount = 0;
   public players = new Map<string, Player>();
   public lastActivity = Date.now();
@@ -71,11 +71,11 @@ class Room {
   }
 
   addHole(hole: any) {
-    const index = this.holeCount % 64;
+    const index = this.holeCount % 2048;
     this.holes[index] = hole;
     this.holeCount++;
     this.lastActivity = Date.now();
-    return this.holeCount > 64; // Indicated we started overwriting
+    return this.holeCount > 2048; // Indicated we started overwriting
   }
 
   isEmpty() {
