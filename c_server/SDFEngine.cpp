@@ -192,6 +192,15 @@ float SDFEngine::intersectHolesAnalytical(vec3 ro, vec3 rd, float maxDist) {
     return closestHit; // Returns maxDist if no hit
 }
 
+float SDFEngine::getVoxelData(int x, int y, int z) {
+    ChunkGrid* grid = getGrid(x, y, z);
+    if (!grid || !grid->initialized) return -1000000.0f; // Very inside/solid fallback
+    int gx = x % 32; if (gx < 0) gx += 32;
+    int gy = y % 32; if (gy < 0) gy += 32;
+    int gz = z % 32; if (gz < 0) gz += 32;
+    return grid->data[gx + gy * 33 + gz * 33 * 33];
+}
+
 // Master Scene Graph Combiner
 vec2 SDFEngine::map(vec3 p, float uLiftY, float uTime) {
     vec2 res = vec2(sdTerrain(p), 0.0f);
@@ -214,48 +223,56 @@ vec2 SDFEngine::map(vec3 p, float uLiftY, float uTime) {
     float baseDist = res.x;
     float matID = res.y;
 
-    // Check voxel grids for modifications
-    uint64_t key = getChunkKey((int)std::floor(p.x), (int)std::floor(p.y), (int)std::floor(p.z));
-    auto it = voxelGrids.find(key);
-    // Check voxel grids for modifications
+    // Check voxel grids for modifications with robust interpolation
     ChunkGrid* grid = getGrid((int)std::floor(p.x), (int)std::floor(p.y), (int)std::floor(p.z));
     
-    if (grid) {
-        int gx = (int)std::floor(p.x) % 32; if (gx < 0) gx += 32;
-        int gy = (int)std::floor(p.y) % 32; if (gy < 0) gy += 32;
-        int gz = (int)std::floor(p.z) % 32; if (gz < 0) gz += 32;
+    if (grid || true) { // Always try to sample if we are close to ANY modified chunk
+        int x0 = (int)std::floor(p.x);
+        int y0 = (int)std::floor(p.y);
+        int z0 = (int)std::floor(p.z);
         
-        float fx = p.x - std::floor(p.x);
-        float fy = p.y - std::floor(p.y);
-        float fz = p.z - std::floor(p.z);
+        float fx = p.x - (float)x0;
+        float fy = p.y - (float)y0;
+        float fz = p.z - (float)z0;
         
-        auto getVVal = [&](int ox, int oy, int oz) {
-            return grid->data[(gx + ox) + (gy + oy) * 33 + (gz + oz) * 33 * 33];
-        };
+        float v000 = getVoxelData(x0, y0, z0);
+        float v100 = getVoxelData(x0 + 1, y0, z0);
+        float v010 = getVoxelData(x0, y0 + 1, z0);
+        float v110 = getVoxelData(x0 + 1, y0 + 1, z0);
+        float v001 = getVoxelData(x0, y0, z0 + 1);
+        float v101 = getVoxelData(x0 + 1, y0, z0 + 1);
+        float v011 = getVoxelData(x0, y0 + 1, z0 + 1);
+        float v111 = getVoxelData(x0 + 1, y0 + 1, z0 + 1);
         
-        float v000 = getVVal(0, 0, 0);
-        float v100 = getVVal(1, 0, 0);
-        float v010 = getVVal(0, 1, 0);
-        float v110 = getVVal(1, 1, 0);
-        float v001 = getVVal(0, 0, 1);
-        float v101 = getVVal(1, 0, 1);
-        float v011 = getVVal(0, 1, 1);
-        float v111 = getVVal(1, 1, 1);
-        
-        // Standard 3D Trilinear Interpolation
-        float i1 = v000 * (1.0f - fx) + v100 * fx;
-        float i2 = v010 * (1.0f - fx) + v110 * fx;
-        float i3 = v001 * (1.0f - fx) + v101 * fx;
-        float i4 = v011 * (1.0f - fx) + v111 * fx;
-        
-        float j1 = i1 * (1.0f - fy) + i2 * fy;
-        float j2 = i3 * (1.0f - fy) + i4 * fy;
-        
-        float res = j1 * (1.0f - fz) + j2 * fz;
+        // Only proceed if at least one sample is valid (not the fallback)
+        if (v000 > -900000.0f || v100 > -900000.0f || v010 > -900000.0f || v110 > -900000.0f ||
+            v001 > -900000.0f || v101 > -900000.0f || v011 > -900000.0f || v111 > -900000.0f) {
+            
+            float i1 = v000 * (1.0f - fx) + v100 * fx;
+            float i2 = v010 * (1.0f - fx) + v110 * fx;
+            float i3 = v001 * (1.0f - fx) + v101 * fx;
+            float i4 = v011 * (1.0f - fx) + v111 * fx;
+            
+            float j1 = i1 * (1.0f - fy) + i2 * fy;
+            float j2 = i3 * (1.0f - fy) + i4 * fy;
+            
+            float voxelRes = j1 * (1.0f - fz) + j2 * fz;
 
-        if (res > baseDist) {
-            baseDist = res;
-            matID = grid->mats[gx + gy * 33 + gz * 33 * 33];
+            // Union with base (digging logic: positive is empty space)
+            if (voxelRes > baseDist) {
+                baseDist = voxelRes;
+                // Material from the closest voxel
+                int mx = (fx < 0.5f) ? x0 : x0 + 1;
+                int my = (fy < 0.5f) ? y0 : y0 + 1;
+                int mz = (fz < 0.5f) ? z0 : z0 + 1;
+                ChunkGrid* mgrid = getGrid(mx, my, mz);
+                if (mgrid) {
+                    int mlx = mx % 32; if (mlx < 0) mlx += 32;
+                    int mly = my % 32; if (mly < 0) mly += 32;
+                    int mlz = mz % 32; if (mlz < 0) mlz += 32;
+                    matID = mgrid->mats[mlx + mly * 33 + mlz * 33 * 33];
+                }
+            }
         }
     }
 

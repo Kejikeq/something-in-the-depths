@@ -117,4 +117,5 @@ public:
 
     // Master scene graph map
     vec2 map(vec3 p, float uLiftY, float uTime);
+    float getVoxelData(int x, int y, int z);
 };
