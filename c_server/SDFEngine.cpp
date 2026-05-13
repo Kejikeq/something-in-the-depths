@@ -242,16 +242,6 @@ vec2 SDFEngine::map(vec3 p, float uLiftY, float uTime) {
         float v011 = getVVal(0, 1, 1);
         float v111 = getVVal(1, 1, 1);
         
-        float c00 = v000 * (1.0f - fx) + v100 * fx;
-        float c01 = v001 * (1.0f - fx) + v101 * fx;
-        float c10 = v010 * (1.0f - fy) + v110 * fy; // Fixed interpolation axes
-        float c11 = v011 * (1.0f - fy) + v111 * fy;
-        
-        float c0 = c00 * (1.0f - fz) + c01 * fz;
-        float c1 = c10 * (1.0f - fz) + c11 * fz;
-        
-        float finalVoxelDist = c0 * (1.0f - fy) + c1 * fy; // Actually, the standard 3D lerp...
-
         // Standard 3D Trilinear Interpolation
         float i1 = v000 * (1.0f - fx) + v100 * fx;
         float i2 = v010 * (1.0f - fx) + v110 * fx;

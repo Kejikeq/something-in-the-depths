@@ -127,7 +127,7 @@ public:
                             for (int gy = 0; gy < 33; gy++) {
                                 for (int gx = 0; gx < 33; gx++) {
                                     vec3 p((float)cx + gx, (float)cy + gy, (float)cz + gz);
-                                    vec2 res = state.sdfEngine.map(p);
+                                    vec2 res = state.sdfEngine.map(p, state.liftY, 0.0f);
                                     int gidx = gx + gy * 33 + gz * 33 * 33;
                                     grid.data[gidx] = res.x;
                                     grid.mats[gidx] = res.y;
@@ -202,7 +202,7 @@ public:
         return val::null();
     }
     val getSDFValue(float x, float y, float z) {
-        vec2 res = state.sdfEngine.map(vec3(x, y, z), 0.0f, 0.0f);
+        vec2 res = state.sdfEngine.map(vec3(x, y, z), state.liftY, 0.0f);
         val obj = val::object();
         obj.set("d", res.x);
         obj.set("m", res.y);
@@ -229,7 +229,7 @@ public:
                 for (int y = 0; y < gridSize; y++) {
                     for (int x = 0; x < gridSize; x++) {
                         vec3 p(cx + x * SPACING, cy + y * SPACING, cz + z * SPACING);
-                        vec2 res = state.sdfEngine.map(p, 0.0f, 0.0f);
+                        vec2 res = state.sdfEngine.map(p, state.liftY, 0.0f);
                         int idx = x + y * gridSize + z * gridSize * gridSize;
                         grid.data[idx] = res.x;
                         grid.mats[idx] = res.y;
@@ -367,9 +367,9 @@ public:
                                 
                                 // Global seamless normal calculation
                                 float eps = 0.05f;
-                                float nx = state.sdfEngine.map(vec3(p.x + eps, p.y, p.z)).x - state.sdfEngine.map(vec3(p.x - eps, p.y, p.z)).x;
-                                float ny = state.sdfEngine.map(vec3(p.x, p.y + eps, p.z)).x - state.sdfEngine.map(vec3(p.x, p.y - eps, p.z)).x;
-                                float nz = state.sdfEngine.map(vec3(p.x, p.y, p.z + eps)).x - state.sdfEngine.map(vec3(p.x, p.y, p.z - eps)).x;
+                                float nx = state.sdfEngine.map(vec3(p.x + eps, p.y, p.z), state.liftY, 0.0f).x - state.sdfEngine.map(vec3(p.x - eps, p.y, p.z), state.liftY, 0.0f).x;
+                                float ny = state.sdfEngine.map(vec3(p.x, p.y + eps, p.z), state.liftY, 0.0f).x - state.sdfEngine.map(vec3(p.x, p.y - eps, p.z), state.liftY, 0.0f).x;
+                                float nz = state.sdfEngine.map(vec3(p.x, p.y, p.z + eps), state.liftY, 0.0f).x - state.sdfEngine.map(vec3(p.x, p.y, p.z - eps), state.liftY, 0.0f).x;
                                 vec3 norm(nx, ny, nz);
                                 float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);
                                 if (nLen > 0.0001f) { norm.x /= nLen; norm.y /= nLen; norm.z /= nLen; }
