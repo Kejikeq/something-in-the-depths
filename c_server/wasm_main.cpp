@@ -141,20 +141,23 @@ public:
     MeshResult generateChunkMesh(float cx, float cy, float cz, int gridSize, int lod) {
         float SPACING = (float)(1 << lod); 
         
-        // Use a local buffer for LOD data to avoid polluting the high-detail voxel cache
-        // which is strictly 32x32x32 at 1.0 resolution.
-        std::vector<float> lodData(gridSize * gridSize * gridSize);
-        std::vector<float> lodMats(gridSize * gridSize * gridSize);
+        // Use a padded local buffer to compute smooth normals and avoid under-generation holes
+        int paddedSize = gridSize + 2;
+        std::vector<float> lodData(paddedSize * paddedSize * paddedSize);
+        std::vector<float> lodMats(paddedSize * paddedSize * paddedSize);
 
-        for (int z = 0; z < gridSize; z++) {
-            for (int y = 0; y < gridSize; y++) {
-                for (int x = 0; x < gridSize; x++) {
-                    int px = (int)cx + x * (int)SPACING;
-                    int py = (int)cy + y * (int)SPACING;
-                    int pz = (int)cz + z * (int)SPACING;
+        for (int z = 0; z < paddedSize; z++) {
+            for (int y = 0; y < paddedSize; y++) {
+                for (int x = 0; x < paddedSize; x++) {
+                    int vx = x - 1;
+                    int vy = y - 1;
+                    int vz = z - 1;
+                    int px = (int)cx + vx * (int)SPACING;
+                    int py = (int)cy + vy * (int)SPACING;
+                    int pz = (int)cz + vz * (int)SPACING;
                     
                     float d = state.sdfEngine.getVoxelData(px, py, pz);
-                    float m = 1.0f; // Default rock
+                    float m = 1.0f; // Default grass
                     
                     if (d < -999999.0f) {
                         vec3 p((float)px, (float)py, (float)pz);
@@ -168,7 +171,7 @@ public:
                         }
                     }
                     
-                    int idx = x + y * gridSize + z * gridSize * gridSize;
+                    int idx = x + y * paddedSize + z * paddedSize * paddedSize;
                     lodData[idx] = d;
                     lodMats[idx] = m;
                 }
@@ -180,7 +183,9 @@ public:
         std::vector<float> colors;
         std::vector<uint32_t> indices;
 
-        auto getIdx = [&](int x, int y, int z) { return x + y * gridSize + z * gridSize * gridSize; };
+        auto getSIdx = [&](int x, int y, int z) { 
+            return (x + 1) + (y + 1) * paddedSize + (z + 1) * paddedSize * paddedSize; 
+        };
         
         auto getColor = [&](float m) {
             return vec3(m, 0.0f, 0.0f); // Pass material ID in the R component
@@ -205,7 +210,7 @@ public:
                     float m[8];
                     int cubeIndex = 0;
                     for (int i = 0; i < 8; i++) {
-                        int idx = getIdx(x + int(cornerOffsets[i].x), y + int(cornerOffsets[i].y), z + int(cornerOffsets[i].z));
+                        int idx = getSIdx(x + int(cornerOffsets[i].x), y + int(cornerOffsets[i].y), z + int(cornerOffsets[i].z));
                         val[i] = lodData[idx];
                         m[i] = lodMats[idx];
                         if (val[i] < 0.0f) cubeIndex |= (1 << i);
@@ -242,11 +247,10 @@ public:
                                 vec3 p1(cx + vx1 * SPACING, cy + vy1 * SPACING, cz + vz1 * SPACING);
                                 vec3 p = p0 + (p1 - p0) * t;
                                 
-                                // Simplified normal for LOD
-                                float eps = 0.1f * SPACING;
-                                float nx = lodData[getIdx(std::min(vx0+1, gridSize-1), vy0, vz0)] - lodData[getIdx(std::max(vx0-1, 0), vy0, vz0)];
-                                float ny = lodData[getIdx(vx0, std::min(vy0+1, gridSize-1), vz0)] - lodData[getIdx(vx0, std::max(vy0-1, 0), vz0)];
-                                float nz = lodData[getIdx(vx0, vy0, std::min(vz0+1, gridSize-1))] - lodData[getIdx(vx0, vy0, std::max(vz0-1, 0))];
+                                // Accurate normal using padded SDF access
+                                float nx = lodData[getSIdx(vx0+1, vy0, vz0)] - lodData[getSIdx(vx0-1, vy0, vz0)];
+                                float ny = lodData[getSIdx(vx0, vy0+1, vz0)] - lodData[getSIdx(vx0, vy0-1, vz0)];
+                                float nz = lodData[getSIdx(vx0, vy0, vz0+1)] - lodData[getSIdx(vx0, vy0, vz0-1)];
 
                                 vec3 norm(nx, ny, nz);
                                 float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);

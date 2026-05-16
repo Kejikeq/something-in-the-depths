@@ -8,21 +8,27 @@ export type GameMessage =
   | { type: 'pong' }
   | { type: 'error', code: string, message: string }
   | { type: 'join', roomId: string, nickname: string, createIfMissing?: boolean }
-  | { type: 'init', id: string, numericId: number, color: string, holes: any[], holeCount?: number, players?: any[] }
+  | { type: 'init', id: string, numericId: number, color: string, voxels?: Record<string, string>, holes?: {x: number, y: number, z: number, r: number}[], players?: any[] }
   | { type: 'player_metadata', players: any[] }
   | { type: 'move', pos: { x: number, y: number, z: number } }
   | { type: 'update_players', players: any[] }
+  | { type: 'player_moved', playerId: string, pos: { x: number, y: number, z: number } }
   | { type: 'dig', hole: { x: number, y: number, z: number, r: number } }
   | { type: 'new_hole', hole: { x: number, y: number, z: number, r: number } }
-  | { type: 'sync_holes', holes: any[], holeCount?: number };
+  | { type: 'update_voxels', voxels: Record<string, string> }
+  | { type: 'sync_voxels', voxels?: Record<string, string>, holes?: {x: number, y: number, z: number, r: number}[] }
+  | { type: 'chat', text: string, sender: string, timestamp: number };
 
 export interface NetworkCallbacks {
-  onInit?: (data: { id: string; numericId: number; color: string; holes: any[]; holeCount?: number, players?: any[] }) => void;
+  onInit?: (data: { id: string; numericId: number; color: string; voxels?: Record<string, string>; holes?: {x: number, y: number, z: number, r: number}[], players?: any[] }) => void;
   onPlayerMetadata?: (players: any[]) => void;
   onUpdatePlayers?: (players: any[]) => void;
+  onPlayerMoved?: (playerId: string, pos: { x: number, y: number, z: number }) => void;
   onBinaryUpdate?: (buffer: ArrayBuffer) => void;
   onNewHole?: (hole: { x: number; y: number; z: number; r: number }) => void;
-  onSyncHoles?: (holes: any[], holeCount?: number) => void;
+  onUpdateVoxels?: (voxels: Record<string, string>) => void;
+  onSyncVoxels?: (voxels?: Record<string, string>, holes?: {x: number, y: number, z: number, r: number}[]) => void;
+  onChatMessage?: (data: { text: string; sender: string; timestamp: number }) => void;
   onPing?: (ping: number) => void;
   onClose?: () => void;
   onError?: (err: any) => void;
@@ -65,7 +71,7 @@ export class NetworkClient {
                 id: this.playerId, 
                 numericId: 0, 
                 color: "#ffffff",
-                holes: [],
+                voxels: {},
                 players: [] 
             });
             return;
@@ -146,21 +152,21 @@ export class NetworkClient {
             this.initReceived = true;
             this.clearConnectionTimers();
             this.playerId = msg.id;
-            if (this.wasmCore && this.wasmModule && msg.holes) {
-               this.syncHolesToWasm(msg.holes);
-            }
             this.callbacks.onInit?.(msg);
           } else if (msg.type === "player_metadata") {
             this.callbacks.onPlayerMetadata?.(msg.players);
           } else if (msg.type === "update_players") {
             this.callbacks.onUpdatePlayers?.(msg.players);
+          } else if (msg.type === "player_moved") {
+            this.callbacks.onPlayerMoved?.(msg.playerId, msg.pos);
           } else if (msg.type === "new_hole") {
             this.callbacks.onNewHole?.(msg.hole);
-          } else if (msg.type === "sync_holes") {
-            if (this.wasmCore && this.wasmModule && msg.holes) {
-               this.syncHolesToWasm(msg.holes);
-            }
-            this.callbacks.onSyncHoles?.(msg.holes, msg.holeCount);
+          } else if (msg.type === "update_voxels") {
+            this.callbacks.onUpdateVoxels?.(msg.voxels);
+          } else if (msg.type === "sync_voxels") {
+            this.callbacks.onSyncVoxels?.(msg.voxels, msg.holes);
+          } else if (msg.type === "chat") {
+            this.callbacks.onChatMessage?.(msg);
           }
         } catch (e) {
           console.warn("Network: failed to parse message", e);
@@ -204,6 +210,8 @@ export class NetworkClient {
       this.positionGetter = fn;
   }
 
+  private lastSentPos = { x: -999, y: -999, z: -999 };
+
   private startSyncLoop() {
     this.stopSyncLoop();
     this.syncInterval = setInterval(() => {
@@ -215,10 +223,16 @@ export class NetworkClient {
                 state = this.positionGetter();
             }
             if (state) {
-                this.broadcastMove(state.x, state.y, state.z);
+                const dx = state.x - this.lastSentPos.x;
+                const dy = state.y - this.lastSentPos.y;
+                const dz = state.z - this.lastSentPos.z;
+                if (dx*dx + dy*dy + dz*dz > 0.001) {
+                    this.broadcastMove(state.x, state.y, state.z);
+                    this.lastSentPos = { x: state.x, y: state.y, z: state.z };
+                }
             }
         }
-    }, 50); // 20 times per second
+    }, 100); // 10 times per second
   }
 
   private stopSyncLoop() {
@@ -258,54 +272,6 @@ export class NetworkClient {
       clearTimeout(this.joinRetryTimer);
       this.joinRetryTimer = null;
     }
-  }
-
-  private syncHolesToWasm(holes: any[]) {
-      if (!this.wasmCore || !this.wasmModule) return;
-      const validHoles = holes.filter(h => h !== null);
-      let count = validHoles.length;
-      if (count > 64) count = 64; // Max support
-      
-      const floatArray = new Float32Array(count * 4);
-      for (let i = 0; i < count; i++) {
-          const h = validHoles[i];
-          floatArray[i * 4] = h.x;
-          floatArray[i * 4 + 1] = h.y;
-          floatArray[i * 4 + 2] = h.z;
-          floatArray[i * 4 + 3] = h.r;
-      }
-      
-      // If we are using the fallback JS physics, they don't have _malloc
-      if (typeof this.wasmCore.syncHoles === 'function') {
-          if (this.wasmModule._malloc) {
-              const numBytes = floatArray.length * floatArray.BYTES_PER_ELEMENT;
-              const ptr = this.wasmModule._malloc(numBytes);
-              const heapBytes = new Uint8Array(this.wasmModule.HEAPU8.buffer, ptr, numBytes);
-              heapBytes.set(new Uint8Array(floatArray.buffer));
-              
-              this.wasmCore.syncHoles(ptr, count);
-              this.wasmModule._free(ptr);
-          } else {
-             // Fallback JS
-             const tempPtr = 0; // The fallback ignores ptr and uses local logic if needed, wait fallback needs ptr?
-             // Actually fallback implementation expects ptr to be inside wasmMemory natively.
-             // We can just rely on the fallback doing its own thing, but since it's JS fake module it needs the ptr. 
-             // Let's modify game_core.js fallback to not need ptr and just accept array directly if we want, OR
-             // We can allocate on the mock wasmMemory!
-             // Wait, mock wasmMemory buffer is accessible. We can just put it there.
-             // Mock wasmMemory doesn't have _malloc.
-             // We'll just call `syncHolesLocal` if no _malloc.
-             if (this.wasmCore.syncHolesLocal) {
-                 this.wasmCore.syncHolesLocal(floatArray, count);
-             } else {
-                 // Alternatively fallback could just be clearHoles + addHole
-                 this.wasmCore.clearHoles();
-                 for (let i=0; i<count; i++) {
-                     this.wasmCore.addHole(floatArray[i*4], floatArray[i*4+1], floatArray[i*4+2], floatArray[i*4+3]);
-                 }
-             }
-          }
-      }
   }
 
   public isConnected() {
@@ -349,6 +315,15 @@ export class NetworkClient {
         view.setFloat32(13, r, true);
         this.socket.send(buffer);
     }
+  }
+
+  public sendChatMessage(text: string, sender: string) {
+    this.send({
+      type: 'chat',
+      text,
+      sender,
+      timestamp: Date.now()
+    });
   }
 
   public send(msg: GameMessage) {

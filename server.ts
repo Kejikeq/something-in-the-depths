@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import path from "path";
@@ -31,8 +30,8 @@ const PLAYER_COLORS = [
 
 class Room {
   public id: string;
-  public holes: any[] = new Array(2048).fill(null);
-  public holeCount = 0;
+  // holes stores the list of dug spheres
+  public holes: {x: number, y: number, z: number, r: number}[] = [];
   public players = new Map<string, Player>();
   public lastActivity = Date.now();
   private nextNumericId = 1;
@@ -71,29 +70,14 @@ class Room {
     this.players.delete(id);
   }
 
-  addHole(hole: any) {
-    const index = this.holeCount % 2048;
-    this.holes[index] = hole;
-    this.holeCount++;
+  // SDF-based digging
+  addHole(x: number, y: number, z: number, r: number) {
+    this.holes.push({ x, y, z, r });
     this.lastActivity = Date.now();
-    return this.holeCount > 2048; // Indicated we started overwriting
   }
 
   isEmpty() {
     return this.players.size === 0;
-  }
-
-  getValidHoles() {
-    return this.holes.filter(h => h !== null);
-  }
-
-  // Get holes relevant to a specific zone (current + neighbors)
-  getFilteredHoles(zoneY: number) {
-    return this.holes.filter(h => {
-      if (!h) return false;
-      const hZone = this.getZone(h.y);
-      return Math.abs(hZone - zoneY) <= 1;
-    });
   }
 }
 
@@ -220,15 +204,13 @@ class GameServer {
       const { player, zoneChanged } = room.addPlayer(playerId, { x, y, z });
       
       if (zoneChanged) {
-        // Send a fresh list of holes for the new zone
+        // Send fresh state
         ws.send(JSON.stringify({
-          type: "sync_holes",
-          holes: room.getFilteredHoles(player.zoneY),
-          holeCount: room.holeCount
+          type: "sync_voxels",
+          holes: room.holes
         }));
       }
 
-      // We still use JSON for the broadcast for now to keep ID associations easy
       this.broadcastToRoom(roomId, {
         type: "update_players",
         players: Array.from(room.players.values())
@@ -238,16 +220,11 @@ class GameServer {
       const hy = data.readFloatLE(5);
       const hz = data.readFloatLE(9);
       const hr = data.readFloatLE(13);
-      const hole = { x: hx, y: hy, z: hz, r: hr };
       
-      const removed = room.addHole(hole);
-      const holeZone = room.getZone(hy);
-
-      if (removed) {
-          this.broadcastToRoom(roomId, { type: "sync_holes", holes: room.getValidHoles(), holeCount: room.holeCount });
-      } else {
-          this.broadcastToRoom(roomId, { type: "new_hole", hole: hole }, holeZone);
-      }
+      room.addHole(hx, hy, hz, hr);
+      
+      // Notify about the dig event for particles/sound and local chunk updating
+      this.broadcastToRoom(roomId, { type: "new_hole", hole: { x: hx, y: hy, z: hz, r: hr } }, playerId);
     }
   }
 
@@ -294,8 +271,7 @@ class GameServer {
         id: playerId, 
         numericId: player.numericId,
         color: player.color,
-        holes: room.getFilteredHoles(player.zoneY),
-        holeCount: room.holeCount,
+        holes: room.holes,
         players: playerList
       }));
 
@@ -327,20 +303,8 @@ class GameServer {
     if (msg.type === "dig") {
       const room = this.rooms.get(roomId);
       if (room) {
-        const removed = room.addHole(msg.hole);
-        const holeZone = room.getZone(msg.hole.y);
-
-        if (removed) {
-            // If the buffer was completely overwritten, we might need to sync everyone
-            // but for Interest Management, we still prefer targeted syncs or filtered global sync
-            this.broadcastToRoom(roomId, { type: "sync_holes", holes: room.getValidHoles(), holeCount: room.holeCount });
-        } else {
-            // Targeted broadcast: only players in the same zone or neighbor zones get the 'new_hole'
-            this.broadcastToRoom(roomId, {
-              type: "new_hole",
-              hole: msg.hole
-            }, holeZone);
-        }
+        room.addHole(msg.hole.x, msg.hole.y, msg.hole.z, msg.hole.r);
+        this.broadcastToRoom(roomId, { type: "new_hole", hole: msg.hole }, playerId);
       }
     }
   }
@@ -370,7 +334,7 @@ class GameServer {
     }
   }
 
-  private broadcastToRoom(roomId: string, payload: any, originZoneY?: number) {
+  private broadcastToRoom(roomId: string, payload: any, excludePlayerId?: string) {
     const room = this.rooms.get(roomId);
     if (!room) return;
 
@@ -396,14 +360,7 @@ class GameServer {
     this.wss.clients.forEach(client => {
       const ws = client as any;
       if (ws.roomId === roomId && client.readyState === WebSocket.OPEN) {
-        // Interest Management filtering
-        if (originZoneY !== undefined) {
-          const player = room.players.get(ws.playerId || "");
-          if (player) {
-            const dist = Math.abs(player.zoneY - originZoneY);
-            if (dist > 1) return; // Skip if too far
-          }
-        }
+        if (excludePlayerId && ws.playerId === excludePlayerId) return;
         client.send(data);
       }
     });
@@ -418,6 +375,7 @@ async function startServer() {
   new GameServer(server, app);
 
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

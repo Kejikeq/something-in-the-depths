@@ -58,16 +58,44 @@ export class InputManager {
 
   constructor(private canvas?: HTMLCanvasElement) {
     this.boundKeyDown = (e) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       this.keys[e.code] = true;
       if (e.code === 'Space') this.triggers.jump = true;
       if (e.code === 'KeyF') this.triggers.toggleLight = true;
       if (e.code === 'KeyE') this.triggers.interact = true;
+      
+      // Release cursor when Alt is pressed
+      if (e.altKey || e.code === 'AltLeft' || e.code === 'AltRight') {
+        if (this.pointerLocked) {
+          document.exitPointerLock();
+        }
+        e.preventDefault();
+      }
     };
     this.boundKeyUp = (e) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       this.keys[e.code] = false;
+      if (e.code === 'AltLeft' || e.code === 'AltRight') {
+        e.preventDefault();
+      }
     };
     this.boundClick = () => {
-      if (!this.pointerLocked && this.canvas) this.canvas.requestPointerLock();
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return;
+      const isAltPressed = this.keys['AltLeft'] || this.keys['AltRight'];
+      if (!this.pointerLocked && this.canvas && !isAltPressed) {
+        try {
+          const promise = this.canvas.requestPointerLock() as unknown as Promise<void>;
+          if (promise && typeof promise.catch === 'function') {
+            promise.catch((e) => {
+              if (e.name !== 'NotAllowedError' && e.name !== 'SecurityError') {
+                 console.warn("Pointer lock error:", e);
+              }
+            });
+          }
+        } catch (err) {
+          // Fallback for non-promise requestPointerLock
+        }
+      }
     };
     this.boundPointerLockChange = () => {
       this.pointerLocked = document.pointerLockElement === this.canvas;
@@ -204,8 +232,8 @@ export class InputManager {
       jump: this.triggers.jump || this.keys['Space'],
       action: this.triggers.action || this.keys['Mouse0'],
       secondaryAction: false,
-      toggleLight: this.triggers.toggleLight || this.keys['KeyF'],
-      interact: this.triggers.interact || this.keys['KeyE'],
+      toggleLight: this.triggers.toggleLight,
+      interact: this.triggers.interact,
     };
 
     // Reset deltas and triggers
@@ -298,5 +326,20 @@ export class InputManager {
   
   public virtualJump() {
       this.triggers.jump = true;
+  }
+
+  public reset() {
+    this.keys = {};
+    this.mouseDeltaX = 0;
+    this.mouseDeltaY = 0;
+    this.triggers = {
+      jump: false,
+      action: false,
+      toggleLight: false,
+      interact: false,
+    };
+    this.touchState.moveVec = { x: 0, y: 0 };
+    this.touchState.joystickId = -1;
+    this.touchState.lookId = -1;
   }
 }

@@ -3,9 +3,10 @@ import { Zap } from 'lucide-react';
 
 interface WinScreenProps {
   hasWon: boolean;
+  onContinue: () => void;
 }
 
-export function WinScreen({ hasWon }: WinScreenProps) {
+export function WinScreen({ hasWon, onContinue }: WinScreenProps) {
   if (!hasWon) return null;
 
   return (
@@ -17,7 +18,7 @@ export function WinScreen({ hasWon }: WinScreenProps) {
         The expedition is a legendary success.
       </p>
       <button 
-        onClick={() => window.location.reload()}
+        onClick={onContinue}
         className="px-12 py-5 border-2 border-emerald-500/40 text-emerald-400 font-mono text-xl hover:bg-emerald-500/20 active:scale-95 transition-all uppercase tracking-[0.4em] shadow-[0_0_50px_rgba(16,185,129,0.2)]"
       >
         Continue

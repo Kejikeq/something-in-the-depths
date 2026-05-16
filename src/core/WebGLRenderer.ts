@@ -3,10 +3,12 @@ import { ChunkRenderer } from './ChunkRenderer';
 import { ParticleRenderer } from './ParticleRenderer';
 import { SkyRenderer } from './SkyRenderer';
 import { TreeRenderer } from './TreeRenderer';
+import { RainRenderer } from './RainRenderer';
 import { createPerspective, createLookAt, multiplyMatrices } from './mathUtils';
 
 export interface RenderState {
   time: number;
+  gameTime: number;
   camPos: { x: number, y: number, z: number };
   camDirX: number;
   camDirY: number;
@@ -17,10 +19,10 @@ export interface RenderState {
   camRightX: number;
   camRightY: number;
   camRightZ: number;
-  holesArray: Float32Array;
-  numHoles: number;
-  holeVersion: number;
+  voxelGrid: any; // We use any here to avoid circular dependencies if needed, or point to VoxelGridManager
+  recentHoles?: {x: number, y: number, z: number, r: number, time: number}[];
   flashlightOn: number;
+  flashlightIntensity: number;
   otherPlayersArray: Float32Array;
   otherColorsArray: Float32Array;
   numOtherPlayers: number;
@@ -31,6 +33,9 @@ export interface RenderState {
   activePetals: number;
   performanceMode: number;
   maxDistance: number;
+  reticlePos: { x: number, y: number, z: number };
+  reticleRadius: number;
+  rainIntensity: number;
 }
 
 export class WebGLRenderer {
@@ -42,8 +47,9 @@ export class WebGLRenderer {
   fbo: WebGLFramebuffer | null = null;
   fboTexture: WebGLTexture | null = null;
 
-  private chunkRenderer: ChunkRenderer;
+  public chunkRenderer: ChunkRenderer;
   public particleRenderer: ParticleRenderer;
+  private rainRenderer: RainRenderer;
   private skyRenderer: SkyRenderer;
   private treeRenderer: TreeRenderer;
   private wasmCore: any = null;
@@ -53,11 +59,17 @@ export class WebGLRenderer {
     canvas.style.touchAction = 'none';
     const gl = canvas.getContext('webgl', { antialias: false, powerPreference: 'high-performance' });
     if (!gl) throw new Error("WebGL not supported");
+    
+    // Enable derivatives for bump mapping (depth map effect)
+    gl.getExtension('OES_standard_derivatives');
+    // Useful for 32-bit index buffers if chunks are large
+    gl.getExtension('OES_element_index_uint');
     this.gl = gl;
 
     this.skyRenderer = new SkyRenderer(gl);
     this.chunkRenderer = new ChunkRenderer(gl);
     this.particleRenderer = new ParticleRenderer(gl);
+    this.rainRenderer = new RainRenderer(gl);
     this.treeRenderer = new TreeRenderer(this);
 
     const compileShader = (type: number, source: string) => {
@@ -101,7 +113,11 @@ export class WebGLRenderer {
     this.postUniforms = {
       scene: uScene,
       res: uResolution,
-      perfMode: gl.getUniformLocation(postProgram, "uPerfMode")
+      perfMode: gl.getUniformLocation(postProgram, "uPerfMode"),
+      sunPos: gl.getUniformLocation(postProgram, "uSunPos"),
+      sunVisible: gl.getUniformLocation(postProgram, "uSunVisible"),
+      time: gl.getUniformLocation(postProgram, "uTime"),
+      rain: gl.getUniformLocation(postProgram, "uRainIntensity")
     };
 
     this.initFBO(canvas.width, canvas.height);
@@ -150,7 +166,7 @@ export class WebGLRenderer {
     
     // Update chunks
     if (this.chunkRenderer) {
-      this.chunkRenderer.update(state.camPos, state.holesArray, state.numHoles, state.holeVersion);
+      this.chunkRenderer.update(state.camPos, state.voxelGrid);
     }
 
     // Pass 1: Render Scene to FBO
@@ -163,7 +179,7 @@ export class WebGLRenderer {
         return;
     }
 
-    gl.clearColor(0.0, 0.0, 0.0, 1.0); // Black: Scene clear
+    gl.clearColor(0.0, 0.0, 0.0, 0.0); // Transparent: Scene clear
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     
     // Scale FOV so it perfectly matches the standard 80 degree vertical FOV used in createPerspective.
@@ -172,7 +188,8 @@ export class WebGLRenderer {
       state.camDirX, state.camDirY, state.camDirZ,
       state.camUpX, state.camUpY, state.camUpZ,
       state.camRightX, state.camRightY, state.camRightZ,
-      state.time, 1.678199
+      state.camPos.x, state.camPos.y, state.camPos.z,
+      state.time, state.gameTime, 1.678199, state.rainIntensity
     );
 
     const aspect = gl.canvas.width / gl.canvas.height;
@@ -190,12 +207,33 @@ export class WebGLRenderer {
     
     // Depth test on for chunks
     gl.enable(gl.DEPTH_TEST);
-    this.chunkRenderer.render(viewProj);
+    this.chunkRenderer.render(
+      viewProj, 
+      state.camPos, 
+      { x: state.camDirX, y: state.camDirY, z: state.camDirZ },
+      state.flashlightOn,
+      state.flashlightIntensity,
+      state.gameTime,
+      state.reticlePos,
+      state.reticleRadius,
+      state.rainIntensity,
+      state.recentHoles
+    );
     
     // Render custom 3D Tree
     const camUp = [state.camUpX, state.camUpY, state.camUpZ];
     const camRight = [state.camRightX, state.camRightY, state.camRightZ];
-    this.treeRenderer.render(viewProj, state.time, camRight, camUp);
+    this.treeRenderer.render(
+      viewProj, 
+      state.time, 
+      camRight, 
+      camUp,
+      state.camPos,
+      { x: state.camDirX, y: state.camDirY, z: state.camDirZ },
+      state.flashlightOn,
+      state.flashlightIntensity,
+      state.gameTime
+    );
     
     // Render particles
     // We need delta time for update. Since we only have total time, keep track of last time.
@@ -205,6 +243,44 @@ export class WebGLRenderer {
     
     this.particleRenderer.update(dt);
     this.particleRenderer.render(viewProj);
+
+    this.rainRenderer.render(viewProj, state.camPos, { x: state.camRightX, y: state.camRightY, z: state.camRightZ }, state.time, state.rainIntensity);
+
+    // Calculate Sun Screen Position for Lens Flare
+    const angle = (state.gameTime / 24.0) * Math.PI * 2.0 - Math.PI / 2.0;
+    const sunDirRaw = { x: Math.cos(angle), y: Math.sin(angle), z: 0.4 };
+    const sunLen = Math.sqrt(sunDirRaw.x**2 + sunDirRaw.y**2 + sunDirRaw.z**2);
+    const sunDir = { x: sunDirRaw.x / sunLen, y: sunDirRaw.y / sunLen, z: sunDirRaw.z / sunLen };
+    
+    // Project sun to screen
+    // We use a point very far away in sun direction
+    const worldSun = {
+        x: state.camPos.x + sunDir.x * 1000.0,
+        y: state.camPos.y + sunDir.y * 1000.0,
+        z: state.camPos.z + sunDir.z * 1000.0
+    };
+    
+    const sunClip = [
+        worldSun.x * viewProj[0] + worldSun.y * viewProj[4] + worldSun.z * viewProj[8] + viewProj[12],
+        worldSun.x * viewProj[1] + worldSun.y * viewProj[5] + worldSun.z * viewProj[9] + viewProj[13],
+        worldSun.x * viewProj[2] + worldSun.y * viewProj[6] + worldSun.z * viewProj[10] + viewProj[14],
+        worldSun.x * viewProj[3] + worldSun.y * viewProj[7] + worldSun.z * viewProj[11] + viewProj[15]
+    ];
+    
+    let sunVisible = 0.0;
+    let sunPos = { x: 0, y: 0 };
+    if (sunClip[3] > 0) {
+        const sunNdc = { x: sunClip[0] / sunClip[3], y: sunClip[1] / sunClip[3] };
+        sunPos = { x: sunNdc.x * 0.5 + 0.5, y: sunNdc.y * 0.5 + 0.5 };
+        
+        // Sun is visible if in front of camera AND above horizon
+        // We also fade it if it's near the edges or if it's nighttime
+        const dayFactor = Math.max(0.0, Math.min(1.0, sunDir.y * 5.0 + 0.5));
+        sunVisible = dayFactor * (1.0 - Math.max(0.0, Math.min(1.0, (Math.sqrt(sunNdc.x**2 + sunNdc.y**2) - 0.8) * 5.0)));
+        
+        // Final check: if sun is behind camera, visible is 0
+        if (sunClip[3] <= 0) sunVisible = 0.0;
+    }
 
     // Pass 2: Post Process FBO to Screen
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -223,6 +299,10 @@ export class WebGLRenderer {
     gl.uniform1i(this.postUniforms.scene, 0);
     gl.uniform2f(this.postUniforms.res, gl.canvas.width, gl.canvas.height);
     gl.uniform1i(this.postUniforms.perfMode, state.performanceMode);
+    gl.uniform2f(this.postUniforms.sunPos, sunPos.x, sunPos.y);
+    gl.uniform1f(this.postUniforms.sunVisible, sunVisible);
+    gl.uniform1f(this.postUniforms.time, state.time);
+    gl.uniform1f(this.postUniforms.rain, state.rainIntensity);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }

@@ -7,6 +7,7 @@ export class TreeRenderer {
 
     private trunkBuffer: WebGLBuffer;
     private branchBuffer: WebGLBuffer;
+    private branchTexture!: WebGLTexture;
 
     private numTrunkVertices = 0;
     private numBranchVertices = 0;
@@ -19,7 +20,67 @@ export class TreeRenderer {
         this.trunkBuffer = this.gl.createBuffer()!;
         this.branchBuffer = this.gl.createBuffer()!;
 
+        this.createBranchTexture();
         this.generateTreeGeometries();
+    }
+
+    private createBranchTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d')!;
+
+        // Transparent background
+        ctx.clearRect(0, 0, 256, 256);
+
+        // Draw clusters for sakura
+        const numClusters = 40;
+        for (let i = 0; i < numClusters; i++) {
+            const cx = 128 + (Math.random() - 0.5) * 160;
+            const cy = 128 + (Math.random() - 0.5) * 160;
+            const r = 20 + Math.random() * 30;
+
+            const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+            const isWhite = Math.random() > 0.7;
+            gradient.addColorStop(0, isWhite ? 'rgba(255, 240, 245, 1.0)' : 'rgba(255, 180, 200, 1.0)');
+            gradient.addColorStop(0.5, isWhite ? 'rgba(255, 230, 240, 0.8)' : 'rgba(255, 150, 180, 0.9)');
+            gradient.addColorStop(1, 'rgba(255, 150, 180, 0.0)');
+            
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            
+            for(let a=0; a<Math.PI*2; a+=0.5) {
+                const nr = r * (0.7 + Math.random() * 0.3);
+                const px = cx + Math.cos(a) * nr;
+                const py = cy + Math.sin(a) * nr;
+                if (a === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        const imgData = ctx.getImageData(0, 0, 256, 256);
+        const data = imgData.data;
+        for (let i = 0; i < data.length; i += 4) {
+            if (data[i+3] > 0) {
+                // simple noise to alpha for jaggedness
+                if (data[i+3] < 200) {
+                   data[i+3] = data[i+3] * (0.8 + Math.random() * 0.4);
+                }
+            }
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        const gl = this.gl;
+        this.branchTexture = gl.createTexture()!;
+        gl.bindTexture(gl.TEXTURE_2D, this.branchTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.generateMipmap(gl.TEXTURE_2D);
     }
 
     private initTrunkShader(): WebGLProgram {
@@ -44,15 +105,42 @@ export class TreeRenderer {
             varying vec3 vNormal;
             varying vec3 vWorldPos;
             
+            uniform vec3 uCameraPos;
+            uniform vec3 uCameraDir;
+            uniform float uFlashlightOn;
+            uniform float uFlashlightIntensity;
+            uniform float uGameTime;
+
             void main() {
                 vec3 n = normalize(vNormal);
-                vec3 light = normalize(vec3(0.5, 1.0, 0.3));
-                float d = max(dot(n, light), 0.0) * 0.6 + 0.4;
                 
+                // Daylight
+                float angle = (uGameTime / 24.0) * 6.28318 - 1.5707;
+                vec3 sunDir = normalize(vec3(cos(angle), sin(angle), 0.4));
+                float dayFactor = smoothstep(-0.1, 0.2, sunDir.y);
+                float ambient = mix(0.05, 0.45, dayFactor);
+                float sunDiff = max(dot(n, sunDir), 0.0) * dayFactor;
+                
+                vec3 lighting = vec3(sunDiff * 0.5 + ambient);
+                
+                // Flashlight
+                if (uFlashlightOn > 0.5) {
+                    float dist = distance(uCameraPos, vWorldPos);
+                    vec3 lightToPos = normalize(vWorldPos - uCameraPos);
+                    float dotLight = dot(lightToPos, uCameraDir);
+                    float totalSpot = smoothstep(0.7, 0.99, dotLight);
+                    float atten = 1.0 / (1.0 + 0.1 * dist + 0.01 * dist * dist);
+                    float rangeLimit = smoothstep(80.0, 5.0, dist);
+                    float intensity = totalSpot * atten * rangeLimit * uFlashlightIntensity * 1.5;
+                    float normalFactor = max(0.0, dot(n, -lightToPos));
+                    
+                    lighting += vec3(1.0, 0.98, 0.88) * intensity * normalFactor;
+                }
+
                 // Bark color
-                vec3 col = vec3(0.35, 0.22, 0.15) * (0.8 + 0.2 * sin(vWorldPos.y * 10.0));
+                vec3 albedo = vec3(0.35, 0.22, 0.15) * (0.8 + 0.2 * sin(vWorldPos.y * 10.0));
                 
-                gl_FragColor = vec4(col * d, 1.0);
+                gl_FragColor = vec4(albedo * lighting, 1.0);
             }
         `;
         
@@ -74,22 +162,12 @@ export class TreeRenderer {
             
             void main() {
                 vUv = uv;
-                
-                // Billboard calculation: 
-                // position contains the center of the branch. uv contains local coords.
                 vec3 pos = position;
-                
-                // Wind sway
                 float sway = sin(uTime * 1.5 + position.x * 0.5 + position.z * 0.5);
                 pos.x += sway * 0.2;
                 pos.z += sway * 0.1;
-
-                vec3 right = uCameraRight;
-                vec3 up = uCameraUp;
-                
                 float size = 4.0;
-                vec3 localPos = right * (uv.x - 0.5) * size + up * (uv.y - 0.5) * size;
-                
+                vec3 localPos = uCameraRight * (uv.x - 0.5) * size + uCameraUp * (uv.y - 0.5) * size;
                 vWorldPos = pos + localPos;
                 gl_Position = uViewProj * vec4(vWorldPos, 1.0);
             }
@@ -100,23 +178,38 @@ export class TreeRenderer {
             varying vec2 vUv;
             varying vec3 vWorldPos;
             
+            uniform sampler2D uBranchTexture;
+            uniform vec3 uCameraPos;
+            uniform vec3 uCameraDir;
+            uniform float uFlashlightOn;
+            uniform float uFlashlightIntensity;
+            uniform float uGameTime;
+
             void main() {
-                vec2 centered = vUv - 0.5;
-                float r = length(centered);
-                if (r > 0.5) discard;
+                vec4 texColor = texture2D(uBranchTexture, vUv);
+                if (texColor.a < 0.2) { discard; }
                 
-                // Sakura flower clusters texture simulation
-                float noise = sin(vUv.x * 20.0) * sin(vUv.y * 20.0);
-                if (noise < -0.2 && r > 0.3) discard;
+                // Branches/Flowers: simulate simple volume shading
+                float angle = (uGameTime / 24.0) * 6.28318 - 1.5707;
+                vec3 sunDir = normalize(vec3(cos(angle), sin(angle), 0.4));
+                float dayFactor = smoothstep(-0.1, 0.2, sunDir.y);
+                float ambient = mix(0.15, 0.55, dayFactor);
                 
-                vec3 pink = vec3(1.0, 0.7, 0.8);
-                vec3 darkPink = vec3(0.9, 0.5, 0.6);
-                vec3 white = vec3(1.0, 0.95, 0.95);
+                vec3 lighting = vec3(ambient);
                 
-                vec3 col = mix(pink, white, r * 2.0 + noise * 0.5);
-                if (noise > 0.5) col = mix(col, darkPink, 0.5);
-                
-                gl_FragColor = vec4(col, 1.0);
+                if (uFlashlightOn > 0.5) {
+                    float dist = distance(uCameraPos, vWorldPos);
+                    vec3 lightToPos = normalize(vWorldPos - uCameraPos);
+                    float dotLight = dot(lightToPos, uCameraDir);
+                    float totalSpot = smoothstep(0.7, 0.99, dotLight);
+                    float atten = 1.0 / (1.0 + 0.1 * dist + 0.01 * dist * dist);
+                    float rangeLimit = smoothstep(80.0, 5.0, dist);
+                    float intensity = totalSpot * atten * rangeLimit * uFlashlightIntensity * 1.5;
+                    
+                    lighting += vec3(1.0, 0.98, 0.88) * intensity;
+                }
+
+                gl_FragColor = vec4(texColor.rgb * lighting, texColor.a);
             }
         `;
         
@@ -216,7 +309,17 @@ export class TreeRenderer {
         this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(branchVerts), this.gl.STATIC_DRAW);
     }
 
-    public render(viewProjMatrix: Float32Array, time: number, right: number[], up: number[]) {
+    public render(
+        viewProjMatrix: Float32Array, 
+        time: number, 
+        right: number[], 
+        up: number[],
+        cameraPos: { x: number, y: number, z: number },
+        cameraDir: { x: number, y: number, z: number },
+        flashlightOn: number,
+        flashlightIntensity: number,
+        gameTime: number
+    ) {
         const gl = this.gl;
         
         // Render Trunk
@@ -224,6 +327,11 @@ export class TreeRenderer {
         
         const locVPTrunk = gl.getUniformLocation(this.trunkProg, "uViewProj");
         gl.uniformMatrix4fv(locVPTrunk, false, viewProjMatrix);
+        gl.uniform3f(gl.getUniformLocation(this.trunkProg, "uCameraPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+        gl.uniform3f(gl.getUniformLocation(this.trunkProg, "uCameraDir"), cameraDir.x, cameraDir.y, cameraDir.z);
+        gl.uniform1f(gl.getUniformLocation(this.trunkProg, "uFlashlightOn"), flashlightOn);
+        gl.uniform1f(gl.getUniformLocation(this.trunkProg, "uFlashlightIntensity"), flashlightIntensity);
+        gl.uniform1f(gl.getUniformLocation(this.trunkProg, "uGameTime"), gameTime);
         
         gl.bindBuffer(gl.ARRAY_BUFFER, this.trunkBuffer);
         
@@ -242,22 +350,25 @@ export class TreeRenderer {
         gl.disableVertexAttribArray(locNorm);
         
         // Render Branches (Billboards)
-        // Disable face culling and depth write for fluffy flowers if needed?
-        // Actually, they are opaque with discard, so depth write is fine!
         gl.disable(gl.CULL_FACE);
         
         gl.useProgram(this.branchProg);
         
         const locVPBranch = gl.getUniformLocation(this.branchProg, "uViewProj");
-        const locTime = gl.getUniformLocation(this.branchProg, "uTime");
-        const locRight = gl.getUniformLocation(this.branchProg, "uCameraRight");
-        const locUp = gl.getUniformLocation(this.branchProg, "uCameraUp");
-        
         gl.uniformMatrix4fv(locVPBranch, false, viewProjMatrix);
-        gl.uniform1f(locTime, time);
+        gl.uniform1f(gl.getUniformLocation(this.branchProg, "uTime"), time);
+        gl.uniform3f(gl.getUniformLocation(this.branchProg, "uCameraPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+        gl.uniform3f(gl.getUniformLocation(this.branchProg, "uCameraDir"), cameraDir.x, cameraDir.y, cameraDir.z);
+        gl.uniform1f(gl.getUniformLocation(this.branchProg, "uFlashlightOn"), flashlightOn);
+        gl.uniform1f(gl.getUniformLocation(this.branchProg, "uFlashlightIntensity"), flashlightIntensity);
+        gl.uniform1f(gl.getUniformLocation(this.branchProg, "uGameTime"), gameTime);
         
-        gl.uniform3fv(locRight, new Float32Array(right));
-        gl.uniform3fv(locUp, new Float32Array(up));
+        gl.uniform3fv(gl.getUniformLocation(this.branchProg, "uCameraRight"), new Float32Array(right));
+        gl.uniform3fv(gl.getUniformLocation(this.branchProg, "uCameraUp"), new Float32Array(up));
+
+        gl.uniform1i(gl.getUniformLocation(this.branchProg, "uBranchTexture"), 0);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.branchTexture);
         
         gl.bindBuffer(gl.ARRAY_BUFFER, this.branchBuffer);
         

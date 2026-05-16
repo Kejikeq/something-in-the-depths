@@ -121,6 +121,21 @@ float SDFEngine::sdTerrain(vec3 p) {
         else b = 4.0f;
 
         // Tunnel SDF - Matched to Shader
+        auto caveSDF = [&](vec3 cp, float floorY, float ceilY, float scale) {
+            float cFloor = cp.y - floorY;
+            float dome = (ceilY - cp.y) + sinNoise(cp * scale) * 4.5f;
+            float walls = std::abs(sinNoise(cp * 0.08f)) - 0.45f;
+            float bounds = length(vec2(cp.x, cp.z)) - 80.0f;
+            return max_f(max_f(max_f(cFloor, dome), -walls), bounds);
+        };
+
+        float c1 = caveSDF(p, -115.0f, -25.0f, 0.45f);
+        float c2 = caveSDF(p, -235.0f, -145.0f, 0.18f);
+        float c3 = caveSDF(p, -355.0f, -265.0f, 0.15f);
+        float abyssSlab = max_f(std::abs(p.y + 440.0f) - 60.0f, length(vec2(p.x, p.z)) - 100.0f);
+
+        float allCaves = min_f(min_f(min_f(c1, c2), c3), abyssSlab);
+        
         float dTunnel = 1000.0f;
         for(int i = 1; i <= 3; i++) {
             float fi = (float)i;
@@ -143,26 +158,9 @@ float SDFEngine::sdTerrain(vec3 p) {
             tube += smoothStep * 8.0f;
             dTunnel = min_f(dTunnel, tube);
         }
-        dTerrain = max_f(dTerrain, -dTunnel);
-
-        auto caveSDF = [&](vec3 cp, float floorY, float ceilY, float scale) {
-            float cFloor = cp.y - floorY;
-            float dome = (ceilY - cp.y) + sinNoise(cp * scale) * 4.5f;
-            float walls = std::abs(sinNoise(cp * 0.08f)) - 0.45f;
-            float bounds = length(vec2(cp.x, cp.z)) - 80.0f;
-            return max_f(max_f(max_f(cFloor, dome), -walls), bounds);
-        };
-
-        if (b == 1.0f) {
-            dTerrain = max_f(dTerrain, -caveSDF(p, -115.0f, -25.0f, 0.45f));
-        } else if (b == 2.0f) {
-            dTerrain = max_f(dTerrain, -caveSDF(p, -235.0f, -145.0f, 0.18f));
-        } else if (b == 3.0f) {
-            dTerrain = max_f(dTerrain, -caveSDF(p, -355.0f, -265.0f, 0.15f));
-        } else if (b == 4.0f) {
-            float abyssSlab = max_f(std::abs(p.y + 440.0f) - 60.0f, length(vec2(p.x, p.z)) - 100.0f);
-            dTerrain = max_f(dTerrain, -abyssSlab);
-        }
+        
+        float allExcavations = min_f(allCaves, dTunnel);
+        dTerrain = max_f(dTerrain, -allExcavations);
     }
 
     if (p.y > -10.0f) {
@@ -175,82 +173,25 @@ float SDFEngine::sdTerrain(vec3 p) {
 
 float SDFEngine::getTerrainMat(vec3 p) {
     float r = length(vec2(p.x, p.z));
-    if (r > 96.0f) return 1.0f; // Stone outer wall
+    if (r > 96.0f) return 0.0f; // Outer Brick Wall
     
     // Biomes by depth
-    if (p.y > -2.0f) return 2.0f;  // Grass (using mat 2)
-    if (p.y < -350.0f) return 6.0f; // Abyss
-    if (p.y < -120.0f) return 5.0f; // Jungle (using mat 5)
-    if (p.y < -15.0f) return 1.0f;  // Rock deep
+    if (p.y > -1.5f) return 1.0f;  // Surface Grass
+    if (p.y < -350.0f) return 5.0f; // Abyss
+    if (p.y < -120.0f) return 4.0f; // Jungle
+    if (p.y < -60.0f) return 3.0f;  // Stone deep
     
-    return 3.0f; // Dirt/Soil (using mat 3)
+    return 2.0f; // Dirt
 }
 
 void SDFEngine::digVoxel(vec3 p, float r) {
-    int xmin = (int)std::floor(p.x - r - 2.0f);
-    int xmax = (int)std::ceil(p.x + r + 2.0f);
-    int ymin = (int)std::floor(p.y - r - 2.0f);
-    int ymax = (int)std::ceil(p.y + r + 2.0f);
-    int zmin = (int)std::floor(p.z - r - 2.0f);
-    int zmax = (int)std::ceil(p.z + r + 2.0f);
-
-    for (int x = xmin; x <= xmax; x++) {
-        for (int y = ymin; y <= ymax; y++) {
-            for (int z = zmin; z <= zmax; z++) {
-                // A point (x,y,z) can be on the boundary of up to 8 chunks.
-                // We need to update all grids that share this voxel coordinate.
-                for (int dx = -1; dx <= 0; dx++) {
-                    for (int dy = -1; dy <= 0; dy++) {
-                        for (int dz = -1; dz <= 0; dz++) {
-                            int cx = ((x + dx * 32) / 32) * 32;
-                            if (x + dx * 32 < 0) cx = ((x + dx * 32 - 31) / 32) * 32;
-                            int cy = ((y + dy * 32) / 32) * 32;
-                            if (y + dy * 32 < 0) cy = ((y + dy * 32 - 31) / 32) * 32;
-                            int cz = ((z + dz * 32) / 32) * 32;
-                            if (z + dz * 32 < 0) cz = ((z + dz * 32 - 31) / 32) * 32;
-
-                            int lx = x - cx;
-                            int ly = y - cy;
-                            int lz = z - cz;
-
-                            if (lx >= 0 && lx <= 32 && ly >= 0 && ly <= 32 && lz >= 0 && lz <= 32) {
-                                uint64_t key = getChunkKey(cx, cy, cz);
-                                auto it = voxelGrids.find(key);
-                                ChunkGrid* grid = nullptr;
-                                if (it == voxelGrids.end()) {
-                                    grid = new ChunkGrid();
-                                    grid->initialized = true;
-                                    for (int lz2 = 0; lz2 <= 32; lz2++) {
-                                        for (int ly2 = 0; ly2 <= 32; ly2++) {
-                                            for (int lx2 = 0; lx2 <= 32; lx2++) {
-                                                vec3 lp((float)(cx + lx2), (float)(cy + ly2), (float)(cz + lz2));
-                                                int gidx2 = lx2 + ly2 * 33 + lz2 * 33 * 33;
-                                                grid->data[gidx2] = sdTerrain(lp);
-                                                grid->mats[gidx2] = getTerrainMat(lp);
-                                            }
-                                        }
-                                    }
-                                    voxelGrids[key] = grid;
-                                } else {
-                                    grid = it->second;
-                                }
-
-                                float ddx = (float)x - p.x;
-                                float ddy = (float)y - p.y;
-                                float ddz = (float)z - p.z;
-                                float distToHole = r - std::sqrt(ddx*ddx + ddy*ddy + ddz*dz);
-                                
-                                int gidx = lx + ly * 33 + lz * 33 * 33;
-                                if (distToHole > grid->data[gidx]) {
-                                    grid->data[gidx] = distToHole;
-                                    grid->mats[gidx] = getTerrainMat(vec3((float)x, (float)y, (float)z));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    updateHoleBounds(p, r);
+    if (numHoles < 2048) {
+        holes[numHoles].x = p.x;
+        holes[numHoles].y = p.y;
+        holes[numHoles].z = p.z;
+        holes[numHoles].r = r;
+        numHoles++;
     }
 }
 
@@ -356,61 +297,12 @@ vec2 SDFEngine::map(vec3 p, float uLiftY, float uTime) {
     // Add visual lift effect AFTER structural SDF
     // res.x += uLiftY; // Incorrect - lift already handled in sdLift
 
-    float baseDist = res.x;
-    float matID = res.y;
-
-    // Check voxel grids for modifications with robust interpolation
-    ChunkGrid* grid = getGrid((int)std::floor(p.x), (int)std::floor(p.y), (int)std::floor(p.z));
-    
-    if (grid || true) { // Always try to sample if we are close to ANY modified chunk
-        int x0 = (int)std::floor(p.x);
-        int y0 = (int)std::floor(p.y);
-        int z0 = (int)std::floor(p.z);
-        
-        float fx = p.x - (float)x0;
-        float fy = p.y - (float)y0;
-        float fz = p.z - (float)z0;
-        
-        float v000 = getVoxelData(x0, y0, z0);
-        float v100 = getVoxelData(x0 + 1, y0, z0);
-        float v010 = getVoxelData(x0, y0 + 1, z0);
-        float v110 = getVoxelData(x0 + 1, y0 + 1, z0);
-        float v001 = getVoxelData(x0, y0, z0 + 1);
-        float v101 = getVoxelData(x0 + 1, y0, z0 + 1);
-        float v011 = getVoxelData(x0, y0 + 1, z0 + 1);
-        float v111 = getVoxelData(x0 + 1, y0 + 1, z0 + 1);
-        
-        // Only proceed if at least one sample is valid (not the fallback)
-        if (v000 > -900000.0f || v100 > -900000.0f || v010 > -900000.0f || v110 > -900000.0f ||
-            v001 > -900000.0f || v101 > -900000.0f || v011 > -900000.0f || v111 > -900000.0f) {
-            
-            float i1 = v000 * (1.0f - fx) + v100 * fx;
-            float i2 = v010 * (1.0f - fx) + v110 * fx;
-            float i3 = v001 * (1.0f - fx) + v101 * fx;
-            float i4 = v011 * (1.0f - fx) + v111 * fx;
-            
-            float j1 = i1 * (1.0f - fy) + i2 * fy;
-            float j2 = i3 * (1.0f - fy) + i4 * fy;
-            
-            float voxelRes = j1 * (1.0f - fz) + j2 * fz;
-
-            // Union with base (digging logic: positive is empty space)
-            if (voxelRes > baseDist) {
-                baseDist = voxelRes;
-                // Material from the closest voxel
-                int mx = (fx < 0.5f) ? x0 : x0 + 1;
-                int my = (fy < 0.5f) ? y0 : y0 + 1;
-                int mz = (fz < 0.5f) ? z0 : z0 + 1;
-                ChunkGrid* mgrid = getGrid(mx, my, mz);
-                if (mgrid) {
-                    int mlx = mx % 32; if (mlx < 0) mlx += 32;
-                    int mly = my % 32; if (mly < 0) mly += 32;
-                    int mlz = mz % 32; if (mlz < 0) mlz += 32;
-                    matID = mgrid->mats[mlx + mly * 33 + mlz * 33 * 33];
-                }
-            }
+    float hDist = getDistance(p);
+    if (hDist > -10.0f) {
+        if (hDist > res.x) {
+            res.x = hDist;
+            res.y = 3.0f;
         }
     }
-
-    return vec2(baseDist, matID);
+    return res;
 }

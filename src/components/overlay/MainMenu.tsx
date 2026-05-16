@@ -80,6 +80,7 @@ export function MainMenu({
                 <div className="flex flex-col gap-1.5">
                     <div className="text-emerald-500/40 text-[7px] uppercase tracking-[0.2em] mb-0.5">Graphics Quality</div>
                     <div className="flex items-center gap-2">
+                        <button onClick={() => setRenderScale(0.25)} className={`flex-1 py-1 font-mono text-[10px] uppercase border transition-all ${renderScale === 0.25 ? 'bg-emerald-500/30 border-emerald-500 text-emerald-400' : 'bg-black/60 border-emerald-500/20 text-emerald-700 hover:bg-emerald-500/10'}`}>Potato</button>
                         <button onClick={() => setRenderScale(0.5)} className={`flex-1 py-1 font-mono text-[10px] uppercase border transition-all ${renderScale === 0.5 ? 'bg-emerald-500/30 border-emerald-500 text-emerald-400' : 'bg-black/60 border-emerald-500/20 text-emerald-700 hover:bg-emerald-500/10'}`}>Low</button>
                         <button onClick={() => setRenderScale(0.75)} className={`flex-1 py-1 font-mono text-[10px] uppercase border transition-all ${renderScale === 0.75 ? 'bg-emerald-500/30 border-emerald-500 text-emerald-400' : 'bg-black/60 border-emerald-500/20 text-emerald-700 hover:bg-emerald-500/10'}`}>Med</button>
                         <button onClick={() => setRenderScale(1.0)} className={`flex-1 py-1 font-mono text-[10px] uppercase border transition-all ${renderScale === 1.0 ? 'bg-emerald-500/30 border-emerald-500 text-emerald-400' : 'bg-black/60 border-emerald-500/20 text-emerald-700 hover:bg-emerald-500/10'}`}>High</button>
@@ -119,13 +120,14 @@ export function MainMenu({
               if (nickname) localStorage.setItem('prospector_nick', nickname);
               setIsAuthenticating(true);
               setAuthError(null);
-              const spawnX = 0, spawnZ = 66;
+              const spawnX = 40, spawnZ = 40;
               const groundY = 0;
               ctx.player.pos = new vec3(spawnX, groundY + 1.5, spawnZ);
               lastSafePos.current = { x: spawnX, y: groundY + 1.5, z: spawnZ };
               ctx.player.yaw = 3.14;
               ctx.player.pitch = -0.1;
               ctx.player.vel = new vec3(0, 0, 0);
+              ctx.input.reset();
               setHasWon(false);
               hasWonRef.current = false;
               setNearSign(false);
@@ -163,13 +165,14 @@ export function MainMenu({
                         if (nickname) localStorage.setItem('prospector_nick', nickname);
                         setIsAuthenticating(true);
                         setAuthError(null);
-                        const spawnX = 0, spawnZ = 66;
+                        const spawnX = 40, spawnZ = 40;
                         const groundY = 0;
                         ctx.player.pos = new vec3(spawnX, groundY + 1.5, spawnZ);
                         lastSafePos.current = { x: spawnX, y: groundY + 1.5, z: spawnZ };
                         ctx.player.yaw = 3.14;
                         ctx.player.pitch = -0.1;
                         ctx.player.vel = new vec3(0, 0, 0);
+                        ctx.input.reset();
                         setHasWon(false);
                         hasWonRef.current = false;
                         setNearSign(false);

@@ -202,7 +202,13 @@ void GameState::tryDig(vec3 camDir) {
     }
 
     if (hitFound) {
+        float r = 1.6f;
+        int idx = sdfEngine.holeIndex;
+        sdfEngine.holes[idx] = { hitX, hitY, hitZ, r };
+        sdfEngine.holeIndex = (sdfEngine.holeIndex + 1) % 2048;
+        if (sdfEngine.numHoles < 2048) sdfEngine.numHoles++;
+        
         // Physical voxel modification
-        sdfEngine.digVoxel(vec3(hitX, hitY, hitZ), 1.6f);
+        sdfEngine.digVoxel(vec3(hitX, hitY, hitZ), r);
     }
 }

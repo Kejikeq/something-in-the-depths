@@ -10,6 +10,7 @@ import { MainMenu } from './components/overlay/MainMenu';
 
 import { HUDOverlay } from './components/overlay/HUDOverlay';
 import { WinScreen } from './components/overlay/WinScreen';
+import { ChatOverlay } from './components/overlay/ChatOverlay';
 import { useGameLoop } from './core/useGameLoop';
 import { useWasmCore } from './core/useWasmCore';
 import { PlayerUIData } from './components/overlay/HUDOverlay';
@@ -36,14 +37,38 @@ export default function App() {
   const nearLiftRef = useRef(false);
   const [renderScale, setRenderScale] = useState(() => window.innerWidth < 768 ? 0.75 : 1.0);
   const renderScaleRef = useRef(renderScale);
+  const [flashlightState, setFlashlightState] = useState(true);
+  
+  const [digSizeIndex, setDigSizeIndex] = useState(1); // 0: small, 1: regular, 2: large
+  const digRadii = [1.5, 3.5, 7.0];
+  const digSizeIndexRef = useRef(1);
 
-  // --- ENGINE CONTEXT ---
+  const [isChatOpen, setIsChatOpen] = useState(false);
+
+  useEffect(() => {
+    digSizeIndexRef.current = digSizeIndex;
+  }, [digSizeIndex]);
+
   const engineRef = useRef<EngineContext>(new EngineContext());
   const ctx = engineRef.current;
 
   useEffect(() => {
     renderScaleRef.current = renderScale;
   }, [renderScale]);
+
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+        if (gameStateRef.current === 'playing') {
+            // User: "down only small [index 0], up to large [index 2]"
+            // Scroll down (deltaY > 0) -> step -1
+            // Scroll up (deltaY < 0) -> step +1
+            const step = e.deltaY > 0 ? -1 : 1;
+            setDigSizeIndex(prev => Math.max(0, Math.min(2, prev + step)));
+        }
+    };
+    window.addEventListener('wheel', handleWheel);
+    return () => window.removeEventListener('wheel', handleWheel);
+  }, []);
 
   const [tripleBuffering, setTripleBuffering] = useState(true);
   const tripleBufferingRef = useRef(true);
@@ -130,7 +155,6 @@ export default function App() {
   const bobTime = useRef(0);
   const walkCycleTime = useRef(0);
   const uTimeRef = useRef(0);
-  const flashlightOn = useRef(1.0);
   const fpsRef = useRef(60);
   const pingRef = useRef(0);
 
@@ -186,6 +210,24 @@ export default function App() {
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (gameState === 'playing' && !hasWon) {
+        if (e.code === 'Enter') {
+          if (!isChatOpen) {
+            setIsChatOpen(true);
+            ctx.input.reset();
+          }
+        }
+        if (e.code === 'Escape' && isChatOpen) {
+          setIsChatOpen(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [gameState, isChatOpen, hasWon]);
+
   const gameStateRef = useRef(gameState);
   useEffect(() => {
       gameStateRef.current = gameState;
@@ -231,26 +273,12 @@ export default function App() {
             setPlayers(data.players);
           }
 
-          if (data.holeCount !== undefined) {
-             ctx.holeRingIndex = data.holeCount;
-             ctx.numHoles = Math.min(data.holeCount, ctx.holesArray.length / 4);
-             data.holes.forEach((h: any, i: number) => {
-               ctx.holesArray[i * 4] = h.x;
-               ctx.holesArray[i * 4 + 1] = h.y;
-               ctx.holesArray[i * 4 + 2] = h.z;
-               ctx.holesArray[i * 4 + 3] = h.r;
-             });
-          } else {
-             ctx.holeRingIndex = data.holes.length;
-             ctx.numHoles = Math.min(data.holes.length, ctx.holesArray.length / 4);
-             ctx.holesArray.fill(0);
-             data.holes.forEach((h: any, i: number) => {
-               if (i >= ctx.holesArray.length / 4) return;
-               ctx.holesArray[i * 4] = h.x;
-               ctx.holesArray[i * 4 + 1] = h.y;
-               ctx.holesArray[i * 4 + 2] = h.z;
-               ctx.holesArray[i * 4 + 3] = h.r;
-             });
+          ctx.voxelGrid.clear();
+          if (data.holes) {
+              data.holes.forEach((h: any) => ctx.addHole(h.x, h.y, h.z, h.r));
+          }
+          if (ctx.chunkRenderer) {
+              ctx.chunkRenderer.dirtyAll();
           }
         },
         onClose: () => {
@@ -290,28 +318,19 @@ export default function App() {
           ctx.addHole(hole.x, hole.y, hole.z, hole.r);
           ctx.audio.playSpatialDig(hole.x, hole.y, hole.z);
         },
-        onSyncHoles: (holes, holeCount) => {
-            if (holeCount !== undefined) {
-                ctx.holeRingIndex = holeCount;
-                ctx.numHoles = Math.min(holeCount, ctx.holesArray.length / 4);
-                holes.forEach((h: any, i: number) => {
-                    ctx.holesArray[i * 4] = h.x;
-                    ctx.holesArray[i * 4 + 1] = h.y;
-                    ctx.holesArray[i * 4 + 2] = h.z;
-                    ctx.holesArray[i * 4 + 3] = h.r;
-                });
-            } else {
-                ctx.holeRingIndex = holes.length;
-                ctx.numHoles = Math.min(holes.length, ctx.holesArray.length / 4);
-                ctx.holesArray.fill(0);
-                holes.forEach((h: any, i: number) => {
-                    if (i >= ctx.holesArray.length / 4) return;
-                    ctx.holesArray[i * 4] = h.x;
-                    ctx.holesArray[i * 4 + 1] = h.y;
-                    ctx.holesArray[i * 4 + 2] = h.z;
-                    ctx.holesArray[i * 4 + 3] = h.r;
-                });
+        onUpdateVoxels: (_voxels) => {
+            // silent
+            ctx.chunkRenderer.dirtyAll();
+        },
+        onSyncVoxels: (_voxels, holes) => {
+            ctx.voxelGrid.clear();
+            if (holes) {
+                holes.forEach((h: any) => ctx.addHole(h.x, h.y, h.z, h.r));
             }
+            ctx.chunkRenderer.dirtyAll();
+        },
+        onChatMessage: (data) => {
+          ctx.onChatMessage(data);
         },
         onPing: (ping) => {
           pingRef.current = ping;
@@ -334,20 +353,42 @@ export default function App() {
   }, [gameState, roomId, nickname]);
 
   const performDigging = useCallback(() => {
-    if (Date.now() - digCooldown.current < 50) return;
+    if (Date.now() - digCooldown.current < 250) return;
     
     if (wasmCoreRef.current) {
         const dirX = Math.sin(ctx.player.yaw) * Math.cos(ctx.player.pitch);
         const dirY = Math.sin(ctx.player.pitch); 
         const dirZ = Math.cos(ctx.player.yaw) * Math.cos(ctx.player.pitch);
         
-        // Use WASM raymarching against the baked Voxel Grid!
-        const hit = wasmCoreRef.current.doDig(dirX, dirY, dirZ);
-        if (hit) {
+        // Raymarch in TS
+        let marchT = 0.5;
+        let hitFound = false;
+        let hitX = 0, hitY = 0, hitZ = 0;
+        const pos = ctx.player.pos;
+        
+        for (let i = 0; i < 150; i++) {
+            const px = pos.x + dirX * marchT;
+            const py = pos.y + dirY * marchT;
+            const pz = pos.z + dirZ * marchT;
+            
+            const d = VoxelEngine.getDistance(new vec3(px, py, pz), ctx.lift.y, ctx.voxelGrid.holes);
+            
+            if (d < 0.01) {
+                hitX = px; hitY = py; hitZ = pz;
+                hitFound = true;
+                break;
+            }
+            
+            marchT += d * 0.95;
+            if (marchT > 25.0) break;
+        }
+
+        if (hitFound) {
             digCooldown.current = Date.now();
-            ctx.addHole(hit.x, hit.y, hit.z, hit.r); // Local JS sync
+            const r = digRadii[digSizeIndexRef.current];
+            ctx.addHole(hitX, hitY, hitZ, r); // Local JS sync
             ctx.audio.playDigSound();
-            ctx.network.broadcastDig(hit.x, hit.y, hit.z, hit.r); // Sync with others
+            ctx.network.broadcastDig(hitX, hitY, hitZ, r); // Sync with others
         }
     }
   }, []);
@@ -364,10 +405,11 @@ export default function App() {
     ctx,
     canvasRef, glRef, rendererRef, wasmCoreRef, wasmModuleRef,
     gameStateRef, renderScaleRef, tripleBufferingRef,
-    flashlightOn, fpsRef, pingRef, bobTime, walkCycleTime, uTimeRef,
+    fpsRef, pingRef, bobTime, walkCycleTime, uTimeRef,
     nearLiftRef, nearSignRef, jumpQueuedRef, hasWonRef,
-    setHasWon, setPlayerUI, setNearSign, setNearLift, setLiftTarget, setIsLocked,
-    performDigging, toggleLift
+    setHasWon, setPlayerUI, setNearSign, setNearLift, setLiftTarget, setIsLocked, setFlashlightState,
+    performDigging, toggleLift,
+    digRadii, digSizeIndexRef
   });
 
 
@@ -382,7 +424,13 @@ export default function App() {
       <div className="absolute top-6 left-6 flex gap-4 items-center pointer-events-none z-[60]">
         <button 
           onClick={() => {
-            ctx.player.pos = new vec3(50, 10, 50); // New safe spawn
+            ctx.player.pos = new vec3(40, 10, 40); 
+            ctx.player.vel = new vec3(0, 0, 0);
+            ctx.player.yaw = 0;
+            ctx.player.pitch = 0;
+            ctx.input.reset();
+            setHasWon(false);
+            hasWonRef.current = false;
             setGameState('menu');
           }}
           className="p-3 rounded-xl bg-black/40 border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20 transition-all pointer-events-auto"
@@ -439,6 +487,18 @@ export default function App() {
         isAuthenticating={isAuthenticating}
         setIsAuthenticating={setIsAuthenticating}
         roomId={roomId}
+        flashlightState={flashlightState}
+        digSizeIndex={digSizeIndex}
+        setDigSizeIndex={setDigSizeIndex}
+        setIsChatOpen={setIsChatOpen}
+      />
+
+      <ChatOverlay 
+        isOpen={isChatOpen}
+        setIsOpen={setIsChatOpen}
+        ctx={ctx}
+        nickname={nickname}
+        setNickname={setNickname}
       />
 
       {/* Main Menu Overlay */}
@@ -458,7 +518,19 @@ export default function App() {
         renderScale={renderScale} setRenderScale={setRenderScale}
         tripleBuffering={tripleBuffering} setTripleBuffering={setTripleBuffering}
       />
-      <WinScreen hasWon={hasWon} />
+      <WinScreen 
+        hasWon={hasWon} 
+        onContinue={() => {
+          ctx.player.pos = new vec3(40, 10, 40); 
+          ctx.player.vel = new vec3(0, 0, 0);
+          ctx.player.yaw = 0;
+          ctx.player.pitch = 0;
+          ctx.input.reset();
+          setHasWon(false);
+          hasWonRef.current = false;
+          setGameState('menu');
+        }}
+      />
     </div>
   );
 }

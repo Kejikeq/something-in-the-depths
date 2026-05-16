@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { EngineContext } from './EngineContext';
 import { VoxelEngine, WORLD_CONFIG, vec3, vec2 } from './VoxelEngine';
 import { WebGLRenderer } from './WebGLRenderer';
@@ -16,7 +16,6 @@ export interface GameLoopDeps {
   renderScaleRef: React.MutableRefObject<number>;
   tripleBufferingRef: React.MutableRefObject<boolean>;
   
-  flashlightOn: React.MutableRefObject<number>;
   fpsRef: React.MutableRefObject<number>;
   pingRef: React.MutableRefObject<number>;
   
@@ -35,9 +34,12 @@ export interface GameLoopDeps {
   setNearLift: (val: boolean) => void;
   setLiftTarget: (val: number) => void;
   setIsLocked: (val: boolean) => void;
+  setFlashlightState: (val: boolean) => void;
   
   performDigging: () => void;
   toggleLift: () => void;
+  digRadii: number[];
+  digSizeIndexRef: React.MutableRefObject<number>;
 }
 
 export function useGameLoop(deps: GameLoopDeps) {
@@ -49,6 +51,7 @@ export function useGameLoop(deps: GameLoopDeps) {
 
     try {
       deps.rendererRef.current = new WebGLRenderer(canvas);
+      deps.ctx.chunkRenderer = deps.rendererRef.current.chunkRenderer;
       deps.glRef.current = deps.rendererRef.current.gl;
       if (deps.wasmCoreRef.current) {
         deps.rendererRef.current.setWasmCore(deps.wasmCoreRef.current);
@@ -62,11 +65,17 @@ export function useGameLoop(deps: GameLoopDeps) {
 
     (window as any)._triggerAction = () => ctx.input.virtualAction();
     (window as any)._triggerJump = () => ctx.input.virtualJump();
-    (window as any)._triggerLight = () => { (ctx.input as any).triggers.toggleLight = true; }
+    (window as any)._triggerLight = () => { 
+        ctx.flashlight.toggle();
+        deps.setFlashlightState(ctx.flashlight.getIsOn());
+    }
     (window as any)._triggerInteract = () => { (ctx.input as any).triggers.interact = true; }
 
     (window as any)._performDigging = deps.performDigging;
-    (window as any)._toggleLight = () => { deps.flashlightOn.current = deps.flashlightOn.current > 0.5 ? 0.0 : 1.0; };
+    (window as any)._toggleLight = () => { 
+        ctx.flashlight.toggle();
+        deps.setFlashlightState(ctx.flashlight.getIsOn());
+    };
     (window as any)._performJump = () => { deps.jumpQueuedRef.current = true; };
     (window as any)._toggleLift = deps.toggleLift;
 
@@ -77,31 +86,44 @@ export function useGameLoop(deps: GameLoopDeps) {
     canvas.addEventListener('webglcontextrestored', () => window.location.reload());
 
     let lastTime = performance.now();
+    let prevGameState = deps.gameStateRef.current;
+    
     const frameInterval = 1000 / 60; // 60 FPS limit
     let frameTimes: number[] = [];
     let lastBroadcastTime = 0;
     let rafId: number;
     let frameCounter = 0;
+    let lastPlayerUILen = 0;
+    let totalMonotonicTime = 0; // Absolute monotonic time for animations
 
     const render = (time: number) => {
       rafId = requestAnimationFrame(render);
 
+      // Reset lastTime if state just changed to avoid massive DT jump
+      if (deps.gameStateRef.current !== prevGameState) {
+          lastTime = time;
+          prevGameState = deps.gameStateRef.current;
+      }
+
       const deltaTime = time - lastTime;
       if (deltaTime < frameInterval) return;
       
+      const dt_sec = deltaTime * 0.001;
       lastTime = time - (deltaTime % frameInterval);
+      totalMonotonicTime += dt_sec; 
+      deps.uTimeRef.current = totalMonotonicTime; // Update ref immediately
       
       frameCounter++;
       const gl = deps.glRef.current;
       if (!gl) return;
       
-      const dt = Math.min(deltaTime * 0.001, 0.1); 
+      const dt = Math.min(dt_sec, 0.1); 
 
       frameTimes.push(time);
       while(frameTimes.length > 0 && frameTimes[0] < time - 1000) frameTimes.shift();
       deps.fpsRef.current = frameTimes.length;
-
-      const dpr = Math.min(window.devicePixelRatio, 1.5); 
+      
+      const dpr = window.devicePixelRatio || 1.0; 
       const targetW = Math.floor(window.innerWidth * dpr * deps.renderScaleRef.current); 
       const targetH = Math.floor(window.innerHeight * dpr * deps.renderScaleRef.current);
       if(canvas.width !== targetW || canvas.height !== targetH) {
@@ -116,7 +138,14 @@ export function useGameLoop(deps: GameLoopDeps) {
       const sy = Math.sin(ctx.player.yaw), cy = Math.cos(ctx.player.yaw), sp = Math.sin(ctx.player.pitch), cp = Math.cos(ctx.player.pitch);
       const camDirX = sy * cp, camDirY = sp, camDirZ = cy * cp;
       
+      const finalIntensity = ctx.flashlight.update(time);
+
+      // Update game time (24 hour cycle every 24 minutes: 1 min per hour)
+      const cycleDuration = 1440000; // 24 minutes in ms
+      ctx.gameTime = (8.0 + (time / cycleDuration) * 24.0 + ctx.gameTimeOffset) % 24.0;
+      
       const activePetals = ctx.particles.update(dt, time);
+      ctx.weather.update(dt);
 
       if (deps.gameStateRef.current === 'playing') {
         let isMoving = false;
@@ -130,7 +159,10 @@ export function useGameLoop(deps: GameLoopDeps) {
             const iState = ctx.input.getState();
 
             if (iState.action) deps.performDigging();
-            if (iState.toggleLight) { deps.flashlightOn.current = deps.flashlightOn.current > 0.5 ? 0.0 : 1.0; }
+            if (iState.toggleLight) { 
+                ctx.flashlight.toggle();
+                deps.setFlashlightState(ctx.flashlight.getIsOn());
+            }
             if (iState.interact) deps.toggleLift();
             if (deps.jumpQueuedRef.current) { iState.jump = true; deps.jumpQueuedRef.current = false; }
             
@@ -167,8 +199,7 @@ export function useGameLoop(deps: GameLoopDeps) {
                 ctx.player.yaw,
                 jump,
                 ctx.lift.y,
-                ctx.holesArray,
-                ctx.numHoles
+                ctx.voxelGrid.holes
             );
             
             ctx.player.pos = nextState.pos;
@@ -180,7 +211,6 @@ export function useGameLoop(deps: GameLoopDeps) {
             const lerpFactor = Math.min(1.0, dt * 15.0);
             deps.bobTime.current = deps.bobTime.current * (1.0 - lerpFactor) + currentSpeed * lerpFactor;
             deps.walkCycleTime.current += dt * 8.0 * currentSpeed;
-            deps.uTimeRef.current = time * 0.001;
         }
 
         const dxCh = ctx.player.pos.x;
@@ -189,6 +219,11 @@ export function useGameLoop(deps: GameLoopDeps) {
         if (dxCh*dxCh + dyCh*dyCh + dzCh*dzCh < 4.0 && !deps.hasWonRef.current) {
             deps.hasWonRef.current = true;
             deps.setHasWon(true);
+            
+            // Release pointer lock so users can click the "Continue" button
+            if (document.pointerLockElement) {
+                document.exitPointerLock();
+            }
         }
 
         if (isMoving && ctx.player.vel.y === 0) {
@@ -198,7 +233,7 @@ export function useGameLoop(deps: GameLoopDeps) {
             }
         }
 
-        ctx.audio.updateListener(ctx.player.pos.x, ctx.player.pos.y, ctx.player.pos.z, camDirX, camDirY, camDirZ);
+        ctx.audio.updateListener(ctx.player.pos, { x: camDirX, y: camDirY, z: camDirZ });
         ctx.audio.updateAmbient(ctx.player.pos.y);
 
         const fwd = { x: sy * cp, y: sp, z: cy * cp };
@@ -206,7 +241,11 @@ export function useGameLoop(deps: GameLoopDeps) {
         const up = { x: -sy * sp, y: cp, z: -cy * sp };
         
         const newPlayerUI = ctx.otherPlayers.interpolateAndProject(dt, 8.0, ctx.player, { fwd, right, up });
-        if (frameCounter % 5 === 0) deps.setPlayerUI(newPlayerUI);
+        // Only update state if length is > 0 OR if it WAS > 0 to avoid continuous empty array updates
+        if (newPlayerUI.length > 0 || lastPlayerUILen > 0) {
+            if (frameCounter % 5 === 0) deps.setPlayerUI(newPlayerUI);
+        }
+        lastPlayerUILen = newPlayerUI.length;
 
         const dxS = ctx.player.pos.x - (-3.0);
         const dzS = ctx.player.pos.z - 28.0;
@@ -236,7 +275,6 @@ export function useGameLoop(deps: GameLoopDeps) {
       } else {
         ctx.player.yaw += dt * 0.05;
         ctx.player.pos = new vec3(50.0, 5.0, 50.0); // Safe grassy area
-        deps.uTimeRef.current = time * 0.001;
       }
       
       if (frameCounter % 10 === 0) {
@@ -262,21 +300,41 @@ export function useGameLoop(deps: GameLoopDeps) {
       }
 
       if (time - lastBroadcastTime > 50 && ctx.network.isConnected() && deps.gameStateRef.current === 'playing') {
-          ctx.network.broadcastPosition(ctx.player);
+          ctx.network.broadcastPosition();
           lastBroadcastTime = time;
       }
 
       if (deps.rendererRef.current) {
+        // Calculate Reticle Position via Raymarching
+        let reticlePos = { x: 0, y: -1000, z: 0 };
+        if (deps.gameStateRef.current === 'playing') {
+            let marchT = 0.5;
+            for (let i = 0; i < 80; i++) {
+                const px = ctx.player.pos.x + camDirX * marchT;
+                const py = ctx.player.pos.y + camDirY * marchT;
+                const pz = ctx.player.pos.z + camDirZ * marchT;
+                const d = VoxelEngine.getDistance(new vec3(px, py, pz), ctx.lift.y, ctx.voxelGrid.holes);
+                if (d < 0.01) {
+                    reticlePos = { x: px, y: py, z: pz };
+                    break;
+                }
+                marchT += d * 0.95;
+                if (marchT > 20.0) break;
+            }
+        }
+
         deps.rendererRef.current.render({
           time: deps.uTimeRef.current,
+          gameTime: ctx.gameTime,
           camPos: ctx.player.pos,
           camDirX, camDirY, camDirZ,
+          // Flashlight direction is now stable, but intensity is variable
+          flashlightIntensity: finalIntensity,
           camUpX: -sy * sp, camUpY: cp, camUpZ: -cy * sp,
           camRightX: -cy, camRightY: 0, camRightZ: sy,
-          holesArray: ctx.holesArray,
-          numHoles: ctx.numHoles,
-          holeVersion: ctx.holeRingIndex,
-          flashlightOn: deps.flashlightOn.current,
+          voxelGrid: ctx.voxelGrid,
+          recentHoles: ctx.recentHoles,
+          flashlightOn: ctx.flashlight.getIsOn() ? 1.0 : 0.0,
           otherPlayersArray: ctx.otherPlayers.otherPlayersArray,
           otherColorsArray: ctx.otherPlayers.otherColorsArray,
           numOtherPlayers: ctx.otherPlayers.numOtherPlayers,
@@ -286,7 +344,10 @@ export function useGameLoop(deps: GameLoopDeps) {
           petalsArray: ctx.particles.petalsArray,
           activePetals,
           performanceMode: deps.tripleBufferingRef.current ? 1 : 0, 
-          maxDistance: deps.renderScaleRef.current < 0.75 ? 150.0 : (deps.renderScaleRef.current < 1.0 ? 180.0 : 250.0)
+          maxDistance: deps.renderScaleRef.current < 0.75 ? 150.0 : (deps.renderScaleRef.current < 1.0 ? 180.0 : 250.0),
+          reticlePos,
+          reticleRadius: deps.digRadii[deps.digSizeIndexRef.current],
+          rainIntensity: ctx.weather.getIntensity()
         });
       }
     };

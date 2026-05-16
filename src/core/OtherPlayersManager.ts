@@ -1,4 +1,4 @@
-import { PlayerUIData } from '../components/overlay/PlayerOverlays';
+import { PlayerUIData } from '../components/overlay/HUDOverlay';
 import { Player } from './Player';
 
 interface PlayerStateData {
@@ -18,6 +18,12 @@ export class OtherPlayersManager {
     public numOtherPlayers = 0;
 
     constructor() {}
+
+    public clear() {
+        this.othersState = {};
+        this.numOtherPlayers = 0;
+        this.otherPlayersArray.fill(-1.0);
+    }
 
     syncPlayerColor(idx: number, hex: string) {
         const r = parseInt(hex.slice(1, 3), 16) / 255;

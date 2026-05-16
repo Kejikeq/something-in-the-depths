@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pickaxe, Zap, Flashlight } from 'lucide-react';
+import { Pickaxe, Zap, Flashlight, MessageSquare } from 'lucide-react';
 import { EngineContext } from '../../core/EngineContext';
 
 export interface PlayerUIData {
@@ -33,6 +33,10 @@ interface HUDOverlayProps {
   isAuthenticating: boolean;
   setIsAuthenticating: (v: boolean) => void;
   roomId: string;
+  flashlightState: boolean;
+  digSizeIndex: number;
+  setDigSizeIndex?: (v: number | ((p: number) => number)) => void;
+  setIsChatOpen?: (v: boolean) => void;
 }
 
 export function ConnectionOverlay({
@@ -237,7 +241,8 @@ export function PlayerOverlays({ gameState, playerUI }: { gameState: string; pla
 export function HUDOverlay({
   ctx, gameState, nearSign, nearLift, liftTarget, playerY,
   connStatus, players, showPlayers, setShowPlayers, myColor, nickname, myNumericId, setGameState,
-  playerUI, isAuthenticating, setIsAuthenticating, roomId
+  playerUI, isAuthenticating, setIsAuthenticating, roomId, flashlightState,
+  digSizeIndex, setDigSizeIndex, setIsChatOpen
 }: HUDOverlayProps) {
   
   if (isAuthenticating) {
@@ -271,6 +276,28 @@ export function HUDOverlay({
         setGameState={setGameState} 
       />
 
+      {/* Flashlight Effects */}
+      {flashlightState && (
+        <>
+            {/* Hand-held Flashlight Indicator */}
+            <div className="absolute bottom-4 right-4 sm:bottom-12 sm:right-12 pointer-events-none group hidden sm:block animate-in fade-in slide-in-from-right-4">
+                <div className="relative">
+                    <div className="absolute -inset-4 bg-amber-500/10 blur-xl rounded-full animate-pulse" />
+                    <div className="px-4 py-2 bg-black/60 border border-emerald-500/30 rounded-lg backdrop-blur-md flex items-center gap-3 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        <span className="text-emerald-400 font-mono text-[9px] uppercase tracking-widest">Photon Beam: Active</span>
+                        <Flashlight size={12} className="text-emerald-400/80" />
+                    </div>
+                </div>
+            </div>
+            
+            {/* Subtle Screen Flare */}
+            <div className="fixed inset-0 pointer-events-none z-10 mix-blend-screen opacity-30">
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-screen h-screen bg-[radial-gradient(circle_at_center,rgba(255,250,220,0.08)_0%,transparent_70%)]" />
+            </div>
+        </>
+      )}
+
       {/* Target Crosshair */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white/50 pointer-events-none mix-blend-difference z-40">
          <div className="w-1.5 h-1.5 rounded-full bg-white"></div>
@@ -286,6 +313,22 @@ export function HUDOverlay({
 
       {/* Adaptive HUD */}
       <div className="absolute inset-x-0 bottom-0 top-0 pointer-events-none p-4 sm:p-8 z-40 grid grid-cols-[1fr_auto] grid-rows-[1fr_auto] items-end block-touch-actions">
+        {/* Voxel Selection (Bottom Centerish) */}
+        <div className="col-start-1 row-start-2 justify-self-center mb-4 sm:mb-0 flex gap-2 pointer-events-auto">
+            {['S', 'M', 'L'].map((label, idx) => (
+                <div 
+                    key={label}
+                    className={`w-8 h-8 sm:w-10 sm:h-10 rounded border flex items-center justify-center font-mono text-xs transition-all ${
+                        digSizeIndex === idx 
+                        ? 'bg-emerald-500 text-black border-emerald-400 font-bold scale-110 shadow-[0_0_15px_rgba(16,185,129,0.5)]' 
+                        : 'bg-black/60 text-emerald-500/40 border-emerald-500/10'
+                    }`}
+                >
+                    {label}
+                </div>
+            ))}
+        </div>
+
         {/* Virtual Joystick area (Bottom Left) */}
         <div id="joystick-base" className="w-24 h-24 rounded-full border border-white/30 bg-white/10 sm:hidden fixed pointer-events-none opacity-0 transition-opacity duration-200 z-50">
           <div className="absolute inset-0 flex items-center justify-center">
@@ -320,6 +363,30 @@ export function HUDOverlay({
                className="absolute bottom-0 right-0 w-12 h-12 rounded-full bg-slate-900/80 backdrop-blur-md border border-emerald-500/30 flex flex-col items-center justify-center text-slate-300 active:scale-95 transition-transform hover:bg-slate-800/60 font-mono shadow-[0_0_20px_rgba(0,0,0,0.5)] z-0 sm:hidden">
                <span className="text-lg leading-none font-bold">⬆</span>
                <span className="text-[8px] uppercase mt-0.5">Jump</span>
+             </button>
+
+             {/* Mobile Dig Size Cycle Button */}
+             <button 
+                onPointerDown={(e) => { 
+                    e.preventDefault(); 
+                    if (setDigSizeIndex) {
+                        setDigSizeIndex(p => (p + 1) % 3);
+                    }
+                }}
+                className="absolute top-0 left-0 w-12 h-12 rounded-full bg-slate-900/80 backdrop-blur-md border border-emerald-500/30 flex flex-col items-center justify-center text-slate-300 active:scale-95 transition-transform hover:bg-slate-800/60 font-mono shadow-[0_0_20px_rgba(0,0,0,0.5)] z-0 sm:hidden -translate-x-full -translate-y-1/2">
+                <span className="text-[14px] font-bold">{['S', 'M', 'L'][digSizeIndex]}</span>
+                <span className="text-[7px] uppercase">Size</span>
+             </button>
+
+             {/* Mobile Chat Button */}
+             <button 
+                onPointerDown={(e) => { 
+                    e.preventDefault(); 
+                    setIsChatOpen?.(true);
+                }}
+                className="absolute bottom-0 left-0 w-12 h-12 rounded-full bg-slate-900/80 backdrop-blur-md border border-emerald-500/30 flex flex-col items-center justify-center text-slate-300 active:scale-95 transition-transform hover:bg-slate-800/60 font-mono shadow-[0_0_20px_rgba(0,0,0,0.5)] z-0 sm:hidden -translate-x-full translate-y-1/2">
+                <MessageSquare size={16} />
+                <span className="text-[7px] uppercase mt-0.5">Chat</span>
              </button>
 
         </div>

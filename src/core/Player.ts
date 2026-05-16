@@ -7,14 +7,14 @@ export class Player {
     pitch: number;
 
     constructor() {
-        this.pos = new vec3(0, 1.5, 0);
+        this.pos = new vec3(50, 1.5, 50);
         this.vel = new vec3(0, 0, 0);
         this.yaw = Math.PI;
         this.pitch = 0;
     }
 
     reset() {
-        this.pos = new vec3(0, 1.5, 0);
+        this.pos = new vec3(50, 1.5, 50);
         this.vel = new vec3(0, 0, 0);
         this.yaw = Math.PI;
         this.pitch = 0;
@@ -27,8 +27,7 @@ export class Player {
         iStateYaw: number, 
         jump: boolean, 
         liftY: number, 
-        holes: Float32Array, 
-        numHoles: number
+        holes: {x: number, y: number, z: number, r: number}[]
     ) {
         this.yaw = iStateYaw;
 
@@ -40,8 +39,7 @@ export class Player {
             this.yaw,
             jump,
             liftY,
-            holes,
-            numHoles
+            holes
         );
 
         this.pos = nextState.pos;

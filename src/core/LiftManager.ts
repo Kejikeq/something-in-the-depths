@@ -21,4 +21,9 @@ export class LiftManager {
         }
         return liftDeltaY;
     }
+
+    public reset() {
+        this.y = 0;
+        this.targetY = 0;
+    }
 }

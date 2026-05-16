@@ -63,4 +63,10 @@ export class ParticleManager {
         }
         return activePetals;
     }
+
+    public clear() {
+        for (let i = 0; i < this.MAX_PETALS; i++) {
+            this.petalsData[i].active = false;
+        }
+    }
 }

@@ -38,8 +38,8 @@ export function useWasmCore() {
     const getHolesArray = (core: any, module: any) => {
         if (!core || !module) return null;
         const pointer = core.getHolesBuffer();
-        // 64 holes * 4 floats (x, y, z, r) = 256 floats
-        return new Float32Array(module.wasmMemory.buffer, pointer, 256);
+        // 2048 holes * 4 floats (x, y, z, r) = 8192 floats
+        return new Float32Array(module.wasmMemory.buffer, pointer, 8192);
     };
 
     return { wasmCore, wasmModule, getHolesArray };

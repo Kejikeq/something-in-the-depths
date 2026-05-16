@@ -108,9 +108,10 @@ public:
         float maxInside = -1000.0f;
         for (int i = 0; i < numHoles && i < 2048; ++i) {
             float dx = p.x - holes[i].x;
+            float dy = p.y - holes[i].y;
             float dz = p.z - holes[i].z;
-            float d2d = std::sqrt(dx*dx + dz*dz);
-            float d = holes[i].r - d2d;
+            float d3d = std::sqrt(dx*dx + dy*dy + dz*dz);
+            float d = holes[i].r - d3d;
             maxInside = std::max(maxInside, d);
         }
         return maxInside;
@@ -121,4 +122,20 @@ public:
     float getVoxelData(int x, int y, int z);
     float getVoxelMat(int x, int y, int z);
     void digVoxel(vec3 p, float r);
+
+    // Optimized Hole Bounding Box
+    float minHoleX = 1e6f, maxHoleX = -1e6f;
+    float minHoleY = 1e6f, maxHoleY = -1e6f;
+    float minHoleZ = 1e6f, maxHoleZ = -1e6f;
+    bool hasHoles = false;
+
+    void updateHoleBounds(vec3 p, float r) {
+        minHoleX = std::min(minHoleX, p.x - r - 2.0f);
+        maxHoleX = std::max(maxHoleX, p.x + r + 2.0f);
+        minHoleY = std::min(minHoleY, p.y - r - 2.0f);
+        maxHoleY = std::max(maxHoleY, p.y + r + 2.0f);
+        minHoleZ = std::min(minHoleZ, p.z - r - 2.0f);
+        maxHoleZ = std::max(maxHoleZ, p.z + r + 2.0f);
+        hasHoles = true;
+    }
 };
