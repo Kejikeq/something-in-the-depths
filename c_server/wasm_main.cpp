@@ -151,8 +151,9 @@ public:
                     float m = 1.0f;
                     
                     if (d < -999999.0f) {
-                        d = state.sdfEngine.sdTerrain(p);
-                        m = state.sdfEngine.getTerrainMat(p);
+                        vec2 terrainRes = state.sdfEngine.sdTerrain(p);
+                        d = terrainRes.x;
+                        m = terrainRes.y;
                     } else {
                         m = state.sdfEngine.getVoxelMat((int)px, (int)py, (int)pz);
                         if (m < 0.0f) m = state.sdfEngine.getTerrainMat(p);

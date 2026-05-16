@@ -101,25 +101,23 @@ vec2 SDFEngine::sdBridge(vec3 p) {
     return vec2(dBridgeFences, 4.0f);
 }
 
-float SDFEngine::sdTerrain(vec3 p) {
-    float dTerrain = p.y;
+vec2 SDFEngine::sdTerrain(vec3 p) {
+    float dGround = p.y;
+    float mat = 2.0f; // Default Dirt
+    
+    // Surface biomes
+    if (p.y > -1.5f) mat = 1.0f; // Grass
+    else if (p.y < -350.0f) mat = 5.0f; // Abyss
+    else if (p.y < -120.0f) mat = 4.0f; // Jungle
+    else if (p.y < -60.0f) mat = 3.0f; // Stone
     
     float dEntrance = length(vec2(p.x, p.z)) - 28.0f;
     float wallNoise = sinNoise(p * 0.5f) * 1.5f; 
     float jaggedWalls = dEntrance + wallNoise;
     float dExcavation = max_f(jaggedWalls, -p.y - 150.0f);
-    dTerrain = max_f(dTerrain, -dExcavation);
+    dGround = max_f(dGround, -dExcavation);
 
     if (p.y <= 0.0f) {
-        float b = 0.0f;
-        if (p.y > -120.0f) b = 1.0f;
-        else if (p.y > -140.0f) b = 0.5f;
-        else if (p.y > -240.0f) b = 2.0f;
-        else if (p.y > -260.0f) b = 0.5f;
-        else if (p.y > -360.0f) b = 3.0f;
-        else if (p.y > -380.0f) b = 0.5f;
-        else b = 4.0f;
-
         // Tunnel SDF - Matched to Shader
         auto caveSDF = [&](vec3 cp, float floorY, float ceilY, float scale) {
             float cFloor = cp.y - floorY;
@@ -160,32 +158,26 @@ float SDFEngine::sdTerrain(vec3 p) {
         }
         
         float allExcavations = min_f(allCaves, dTunnel);
-        dTerrain = max_f(dTerrain, -allExcavations);
+        dGround = max_f(dGround, -allExcavations);
     }
 
+    vec2 res(dGround, mat);
+
+    // Wall logic
     if (p.y > -10.0f) {
-        float dWall = max_f(std::abs(length(vec2(p.x, p.z)) - 100.0f) - 1.25f, std::abs(p.y - 12.5f) - 12.5f);
-        if (dWall < dTerrain) dTerrain = dWall;
+        float r = length(vec2(p.x, p.z));
+        float dWall = max_f(std::abs(r - 100.0f) - 1.25f, std::abs(p.y - 12.5f) - 12.5f);
+        if (dWall < res.x) {
+            res.x = dWall;
+            res.y = 0.0f; // Brick Wall material
+        }
     }
     
-    return dTerrain;
+    return res;
 }
 
 float SDFEngine::getTerrainMat(vec3 p) {
-    float r = length(vec2(p.x, p.z));
-    
-    // Wall material check (matches sdTerrain logic for wall)
-    float dWallRadial = std::abs(r - 100.0f) - 1.35f;
-    float dWallHeight = std::abs(p.y - 12.5f) - 12.6f;
-    if (dWallRadial < 0.0f && dWallHeight < 0.0f) return 0.0f; // Brick Wall material
-    
-    // Biomes by depth
-    if (p.y > -1.5f) return 1.0f;  // Surface Grass
-    if (p.y < -350.0f) return 5.0f; // Abyss
-    if (p.y < -120.0f) return 4.0f; // Jungle
-    if (p.y < -60.0f) return 3.0f;  // Stone deep
-    
-    return 2.0f; // Dirt
+    return sdTerrain(p).y;
 }
 
 float SDFEngine::getVoxelData(int x, int y, int z) {
@@ -277,9 +269,7 @@ inline float opSmoothSubtraction(float d1, float d2, float k) {
 
 // Master Scene Graph Combiner
 vec2 SDFEngine::map(vec3 p, float uLiftY, float uTime) {
-    float dBase = sdTerrain(p);
-    float baseMat = getTerrainMat(p);
-    vec2 res = vec2(dBase, baseMat);
+    vec2 res = sdTerrain(p);
 
     vec2 bridgeRes = sdBridge(p);
     if (bridgeRes.x < res.x) res = bridgeRes;

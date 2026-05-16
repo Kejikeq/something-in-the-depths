@@ -98,7 +98,7 @@ public:
     vec2 sdSakuraTree(vec3 p);
     vec2 sdLift(vec3 p, float uLiftY, float uTime);
     vec2 sdBridge(vec3 p);
-    float sdTerrain(vec3 p);
+    vec2 sdTerrain(vec3 p);
     float getTerrainMat(vec3 p);
 
     // Analytical Digging
