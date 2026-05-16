@@ -241,7 +241,7 @@ public:
                                     float type = (h > 0.985f) ? (0.7f + std::floor(worldHash(wx * 1.5f, wy, wz * 1.5f) * 3.0f) * 0.1f)
                                                               : (std::floor(worldHash(wx * 0.5f, wy, wz * 0.5f) * 3.0f) * 0.1f);
                                     billboards.push_back(wx + jitterX);
-                                    billboards.push_back(cy + ((float)y + t) * SPACING - 1.1f);
+                                    billboards.push_back(cy + ((float)y + t) * SPACING + 0.1f);
                                     billboards.push_back(wz + jitterZ);
                                     billboards.push_back(type);
                                 }
@@ -275,7 +275,7 @@ public:
                                 
                                 float nx = lodData[getSIdx(vx0+1, vy0, vz0)] - lodData[getSIdx(vx0-1, vy0, vz0)];
                                 float ny = lodData[getSIdx(vx0, vy0+1, vz0)] - lodData[getSIdx(vx0, vy0-1, vz0)];
-                                float nz = lodData[getSIdx(vx0, vy0, vz0+1)] - lodData[getSIdx(vx0, vy0-1, vz0)];
+                                float nz = lodData[getSIdx(vx0, vy0, vz0+1)] - lodData[getSIdx(vx0, vy0, vz0-1)];
                                 vec3 norm(nx, ny, nz);
                                 float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);
                                 if (nLen > 0.0001f) { norm.x /= nLen; norm.y /= nLen; norm.z /= nLen; }
@@ -285,7 +285,7 @@ public:
                                 float darkId = d[v0] + (d[v1] - d[v0]) * t;
                                 float finalM = matId;
                                 if (finalM >= 0.8f && finalM <= 1.2f) {
-                                    float steep = std::max(0.0f, std::min(1.0f, (0.85f - norm.y) * 5.0f));
+                                    float steep = std::max(0.0f, std::min(1.0f, (0.45f - norm.y) * 8.0f));
                                     finalM = matId * (1.0f - steep) + 3.0f * steep;
                                 }
                                 

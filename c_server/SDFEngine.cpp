@@ -173,7 +173,11 @@ float SDFEngine::sdTerrain(vec3 p) {
 
 float SDFEngine::getTerrainMat(vec3 p) {
     float r = length(vec2(p.x, p.z));
-    if (r > 96.0f) return 0.0f; // Outer Brick Wall
+    
+    // Wall material check (matches sdTerrain logic for wall)
+    float dWallRadial = std::abs(r - 100.0f) - 1.35f;
+    float dWallHeight = std::abs(p.y - 12.5f) - 12.6f;
+    if (dWallRadial < 0.0f && dWallHeight < 0.0f) return 0.0f; // Brick Wall material
     
     // Biomes by depth
     if (p.y > -1.5f) return 1.0f;  // Surface Grass
