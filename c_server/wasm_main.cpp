@@ -12,11 +12,17 @@ struct MeshResult {
     val normals = val::null();
     val colors = val::null();
     val indices = val::null();
+    val billboards = val::null();
 };
 
 class WasmGameCore {
 private:
     GameState state;
+
+    float worldHash(float x, float y, float z) {
+        float h = std::sin(x * 12.9898f + y * 78.233f + z * 37.719f) * 43758.5453f;
+        return h - std::floor(h);
+    }
 
 public:
     WasmGameCore() {}
@@ -90,28 +96,14 @@ public:
     void syncHoles(uintptr_t data, int count) {
         if (count > 2048) count = 2048;
         HoleStruct* src = reinterpret_cast<HoleStruct*>(data);
+        state.sdfEngine.numHoles = 0; // Reset before syncing
         for (int i = 0; i < count; i++) {
-            state.sdfEngine.holes[i] = src[i];
-            // Apply each hole to the voxel system
-            state.sdfEngine.digVoxel(vec3(src[i].x, src[i].y, src[i].z), src[i].r);
+            state.sdfEngine.addHoleInternal(src[i].x, src[i].y, src[i].z, src[i].r);
         }
-        state.sdfEngine.numHoles = count;
-        state.sdfEngine.holeIndex = count % 2048;
     }
 
     void addHole(float x, float y, float z, float r) {
-        int idx = state.sdfEngine.holeIndex;
-        state.sdfEngine.holes[idx].x = x;
-        state.sdfEngine.holes[idx].y = y;
-        state.sdfEngine.holes[idx].z = z;
-        state.sdfEngine.holes[idx].r = r;
-        
-        state.sdfEngine.holeIndex = (state.sdfEngine.holeIndex + 1) % 2048;
-        if (state.sdfEngine.numHoles < 2048) {
-            state.sdfEngine.numHoles++;
-        }
-
-        state.sdfEngine.digVoxel(vec3(x, y, z), r);
+        state.sdfEngine.addHoleInternal(x, y, z, r);
     }
 
     val doDig(float dirX, float dirY, float dirZ) {
@@ -141,39 +133,54 @@ public:
     MeshResult generateChunkMesh(float cx, float cy, float cz, int gridSize, int lod) {
         float SPACING = (float)(1 << lod); 
         
-        // Use a padded local buffer to compute smooth normals and avoid under-generation holes
         int paddedSize = gridSize + 2;
         std::vector<float> lodData(paddedSize * paddedSize * paddedSize);
         std::vector<float> lodMats(paddedSize * paddedSize * paddedSize);
+        std::vector<float> lodDark(paddedSize * paddedSize * paddedSize);
 
         for (int z = 0; z < paddedSize; z++) {
             for (int y = 0; y < paddedSize; y++) {
                 for (int x = 0; x < paddedSize; x++) {
-                    int vx = x - 1;
-                    int vy = y - 1;
-                    int vz = z - 1;
-                    int px = (int)cx + vx * (int)SPACING;
-                    int py = (int)cy + vy * (int)SPACING;
-                    int pz = (int)cz + vz * (int)SPACING;
+                    int vx = x - 1; int vy = y - 1; int vz = z - 1;
+                    float px = cx + (float)vx * SPACING;
+                    float py = cy + (float)vy * SPACING;
+                    float pz = cz + (float)vz * SPACING;
+                    vec3 p(px, py, pz);
                     
-                    float d = state.sdfEngine.getVoxelData(px, py, pz);
-                    float m = 1.0f; // Default grass
+                    float d = state.sdfEngine.getVoxelData((int)px, (int)py, (int)pz);
+                    float m = 1.0f;
                     
                     if (d < -999999.0f) {
-                        vec3 p((float)px, (float)py, (float)pz);
                         d = state.sdfEngine.sdTerrain(p);
                         m = state.sdfEngine.getTerrainMat(p);
                     } else {
-                        m = state.sdfEngine.getVoxelMat(px, py, pz);
-                        if (m < 0.0f) {
-                            vec3 p((float)px, (float)py, (float)pz);
-                            m = state.sdfEngine.getTerrainMat(p);
+                        m = state.sdfEngine.getVoxelMat((int)px, (int)py, (int)pz);
+                        if (m < 0.0f) m = state.sdfEngine.getTerrainMat(p);
+                    }
+
+                    // Apply holes to density
+                    float hDist = state.sdfEngine.getDistance(p);
+                    if (hDist > -10.0f) {
+                        if (hDist > d) d = hDist;
+                    }
+
+                    // Compute AO (Darkness)
+                    float darkness = 0.0f;
+                    if (py < 0.0f) {
+                        float depth = std::abs(py);
+                        if (depth < 20.0f) darkness = depth / 20.0f;
+                        else darkness = 1.0f;
+                        // Lighten up near holes
+                        if (hDist > -4.0f) {
+                            float holeFactor = std::max(0.0f, std::min(1.0f, (hDist + 4.0f) / 4.0f));
+                            darkness *= (1.0f - holeFactor * 0.8f);
                         }
                     }
-                    
+
                     int idx = x + y * paddedSize + z * paddedSize * paddedSize;
                     lodData[idx] = d;
                     lodMats[idx] = m;
+                    lodDark[idx] = darkness;
                 }
             }
         }
@@ -182,13 +189,10 @@ public:
         std::vector<float> normals;
         std::vector<float> colors;
         std::vector<uint32_t> indices;
+        std::vector<float> billboards;
 
         auto getSIdx = [&](int x, int y, int z) { 
             return (x + 1) + (y + 1) * paddedSize + (z + 1) * paddedSize * paddedSize; 
-        };
-        
-        auto getColor = [&](float m) {
-            return vec3(m, 0.0f, 0.0f); // Pass material ID in the R component
         };
 
         vec3 cornerOffsets[8] = {
@@ -206,14 +210,43 @@ public:
         for (int z = 0; z < gridSize - 1; z++) {
             for (int y = 0; y < gridSize - 1; y++) {
                 for (int x = 0; x < gridSize - 1; x++) {
-                    float val[8];
-                    float m[8];
+                    float val[8]; float m[8]; float d[8];
                     int cubeIndex = 0;
                     for (int i = 0; i < 8; i++) {
                         int idx = getSIdx(x + int(cornerOffsets[i].x), y + int(cornerOffsets[i].y), z + int(cornerOffsets[i].z));
                         val[i] = lodData[idx];
                         m[i] = lodMats[idx];
+                        d[i] = lodDark[idx];
                         if (val[i] < 0.0f) cubeIndex |= (1 << i);
+                    }
+
+                    // Billboard generation (only LOD 0)
+                    if (lod == 0 && cubeIndex != 0 && cubeIndex != 255) {
+                        float baseM = m[0];
+                        if (baseM >= 0.8f && baseM <= 1.5f) {
+                            float wx = cx + (float)x * SPACING;
+                            float wy = cy + (float)y * SPACING;
+                            float wz = cz + (float)z * SPACING;
+                            float h = worldHash(wx, wy, wz);
+                            float densH = worldHash(std::floor(wx * 0.1f), 0, std::floor(wz * 0.1f)) * 0.5f +
+                                          worldHash(std::floor(wx * 0.03f), 1, std::floor(wz * 0.03f)) * 0.5f;
+                            float threshold = 0.55f + densH * 0.4f;
+                            if (h > threshold) {
+                                float centerD = lodData[getSIdx(x, y, z)];
+                                float upD = lodData[getSIdx(x, y+1, z)];
+                                if (centerD < 0.0f && upD >= 0.0f) {
+                                    float t = centerD / (centerD - upD);
+                                    float jitterX = (worldHash(wx + 7, wy, wz) - 0.5f) * SPACING * 0.9f;
+                                    float jitterZ = (worldHash(wx, wy, wz + 13) - 0.5f) * SPACING * 0.9f;
+                                    float type = (h > 0.985f) ? (0.7f + std::floor(worldHash(wx * 1.5f, wy, wz * 1.5f) * 3.0f) * 0.1f)
+                                                              : (std::floor(worldHash(wx * 0.5f, wy, wz * 0.5f) * 3.0f) * 0.1f);
+                                    billboards.push_back(wx + jitterX);
+                                    billboards.push_back(cy + ((float)y + t) * SPACING - 1.1f);
+                                    billboards.push_back(wz + jitterZ);
+                                    billboards.push_back(type);
+                                }
+                            }
+                        }
                     }
                     
                     if (edgeTable[cubeIndex] == 0) continue;
@@ -223,16 +256,9 @@ public:
                     
                     for (int i = 0; i < 12; i++) {
                         if (edgeMask & (1 << i)) {
-                            int v0 = edgeVertices[i][0];
-                            int v1 = edgeVertices[i][1];
-                            
-                            int vx0 = x + int(cornerOffsets[v0].x);
-                            int vy0 = y + int(cornerOffsets[v0].y);
-                            int vz0 = z + int(cornerOffsets[v0].z);
-                            
-                            int vx1 = x + int(cornerOffsets[v1].x);
-                            int vy1 = y + int(cornerOffsets[v1].y);
-                            int vz1 = z + int(cornerOffsets[v1].z);
+                            int v0 = edgeVertices[i][0]; int v1 = edgeVertices[i][1];
+                            int vx0 = x + int(cornerOffsets[v0].x); int vy0 = y + int(cornerOffsets[v0].y); int vz0 = z + int(cornerOffsets[v0].z);
+                            int vx1 = x + int(cornerOffsets[v1].x); int vy1 = y + int(cornerOffsets[v1].y); int vz1 = z + int(cornerOffsets[v1].z);
                             
                             uint64_t key1 = (uint64_t)vx0 | ((uint64_t)vy0 << 10) | ((uint64_t)vz0 << 20);
                             uint64_t key2 = (uint64_t)vx1 | ((uint64_t)vy1 << 10) | ((uint64_t)vz1 << 20);
@@ -243,33 +269,30 @@ public:
                                 edgeIndices[i] = it->second;
                             } else {
                                 float t = val[v0] / (val[v0] - val[v1]);
-                                vec3 p0(cx + vx0 * SPACING, cy + vy0 * SPACING, cz + vz0 * SPACING);
-                                vec3 p1(cx + vx1 * SPACING, cy + vy1 * SPACING, cz + vz1 * SPACING);
+                                vec3 p0(cx + (float)vx0 * SPACING, cy + (float)vy0 * SPACING, cz + (float)vz0 * SPACING);
+                                vec3 p1(cx + (float)vx1 * SPACING, cy + (float)vy1 * SPACING, cz + (float)vz1 * SPACING);
                                 vec3 p = p0 + (p1 - p0) * t;
                                 
-                                // Accurate normal using padded SDF access
                                 float nx = lodData[getSIdx(vx0+1, vy0, vz0)] - lodData[getSIdx(vx0-1, vy0, vz0)];
                                 float ny = lodData[getSIdx(vx0, vy0+1, vz0)] - lodData[getSIdx(vx0, vy0-1, vz0)];
-                                float nz = lodData[getSIdx(vx0, vy0, vz0+1)] - lodData[getSIdx(vx0, vy0, vz0-1)];
-
+                                float nz = lodData[getSIdx(vx0, vy0, vz0+1)] - lodData[getSIdx(vx0, vy0-1, vz0)];
                                 vec3 norm(nx, ny, nz);
                                 float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);
                                 if (nLen > 0.0001f) { norm.x /= nLen; norm.y /= nLen; norm.z /= nLen; }
                                 else { norm = vec3(0, 1, 0); }
                                 
-                                float matId = (t < 0.5f) ? m[v0] : m[v1];
-                                vec3 col = getColor(matId);
+                                float matId = m[v0] + (m[v1] - m[v0]) * t;
+                                float darkId = d[v0] + (d[v1] - d[v0]) * t;
+                                float finalM = matId;
+                                if (finalM >= 0.8f && finalM <= 1.2f) {
+                                    float steep = std::max(0.0f, std::min(1.0f, (0.85f - norm.y) * 5.0f));
+                                    finalM = matId * (1.0f - steep) + 3.0f * steep;
+                                }
                                 
                                 uint32_t newIdx = vertices.size() / 3;
-                                vertices.push_back(p.x);
-                                vertices.push_back(p.y);
-                                vertices.push_back(p.z);
-                                normals.push_back(norm.x);
-                                normals.push_back(norm.y);
-                                normals.push_back(norm.z);
-                                colors.push_back(col.x);
-                                colors.push_back(col.y);
-                                colors.push_back(col.z);
+                                vertices.push_back(p.x); vertices.push_back(p.y); vertices.push_back(p.z);
+                                normals.push_back(norm.x); normals.push_back(norm.y); normals.push_back(norm.z);
+                                colors.push_back(finalM); colors.push_back(darkId); colors.push_back(0.0f);
                                 
                                 edgeToVertex[edgeKey] = newIdx;
                                 edgeIndices[i] = newIdx;
@@ -279,33 +302,25 @@ public:
                     
                     for (int i = 0; triTable[cubeIndex][i] != -1; i += 3) {
                         indices.push_back(edgeIndices[triTable[cubeIndex][i]]);
-                        indices.push_back(edgeIndices[triTable[cubeIndex][i+1]]);
                         indices.push_back(edgeIndices[triTable[cubeIndex][i+2]]);
+                        indices.push_back(edgeIndices[triTable[cubeIndex][i+1]]);
                     }
                 }
             }
         }
 
-        // Подготавливаем типизированные массивы для возврата в JS (обязательное копирование через slice)
         val jsVertices = vertices.empty() ? val::global("Float32Array").new_(0) : val::global("Float32Array").new_(typed_memory_view(vertices.size(), vertices.data())).call<val>("slice");
         val jsNormals = normals.empty() ? val::global("Float32Array").new_(0) : val::global("Float32Array").new_(typed_memory_view(normals.size(), normals.data())).call<val>("slice");
-        
-        // Квантуем материалы до целых чисел 1-8
-        for (size_t i = 0; i < colors.size(); i += 3) {
-            float m = colors[i];
-            float finalM = std::max(1.0f, std::min(8.0f, std::floor(m + 0.5f)));
-            colors[i] = finalM;
-            colors[i+1] = finalM;
-            colors[i+2] = finalM;
-        }
         val jsColors = colors.empty() ? val::global("Float32Array").new_(0) : val::global("Float32Array").new_(typed_memory_view(colors.size(), colors.data())).call<val>("slice");
         val jsIndices = indices.empty() ? val::global("Uint32Array").new_(0) : val::global("Uint32Array").new_(typed_memory_view(indices.size(), indices.data())).call<val>("slice");
+        val jsBillboards = billboards.empty() ? val::global("Float32Array").new_(0) : val::global("Float32Array").new_(typed_memory_view(billboards.size(), billboards.data())).call<val>("slice");
 
         MeshResult result;
         result.vertices = jsVertices;
         result.normals = jsNormals;
         result.colors = jsColors;
         result.indices = jsIndices;
+        result.billboards = jsBillboards;
         
         return result;
     }
@@ -316,7 +331,8 @@ EMSCRIPTEN_BINDINGS(my_module) {
         .field("vertices", &MeshResult::vertices)
         .field("normals", &MeshResult::normals)
         .field("colors", &MeshResult::colors)
-        .field("indices", &MeshResult::indices);
+        .field("indices", &MeshResult::indices)
+        .field("billboards", &MeshResult::billboards);
 
     class_<WasmGameCore>("WasmGameCore")
         .constructor<>()

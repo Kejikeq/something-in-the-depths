@@ -121,7 +121,16 @@ public:
     vec2 map(vec3 p, float uLiftY, float uTime);
     float getVoxelData(int x, int y, int z);
     float getVoxelMat(int x, int y, int z);
-    void digVoxel(vec3 p, float r);
+    void addHoleInternal(float x, float y, float z, float r) {
+        updateHoleBounds(vec3(x, y, z), r);
+        int idx = holeIndex;
+        holes[idx].x = x;
+        holes[idx].y = y;
+        holes[idx].z = z;
+        holes[idx].r = r;
+        holeIndex = (holeIndex + 1) % 2048;
+        if (numHoles < 2048) numHoles++;
+    }
 
     // Optimized Hole Bounding Box
     float minHoleX = 1e6f, maxHoleX = -1e6f;

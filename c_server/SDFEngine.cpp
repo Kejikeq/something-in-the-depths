@@ -184,17 +184,6 @@ float SDFEngine::getTerrainMat(vec3 p) {
     return 2.0f; // Dirt
 }
 
-void SDFEngine::digVoxel(vec3 p, float r) {
-    updateHoleBounds(p, r);
-    if (numHoles < 2048) {
-        holes[numHoles].x = p.x;
-        holes[numHoles].y = p.y;
-        holes[numHoles].z = p.z;
-        holes[numHoles].r = r;
-        numHoles++;
-    }
-}
-
 float SDFEngine::getVoxelData(int x, int y, int z) {
     // We want to find a chunk that contains this point AND is initialized.
     // Standard chunk for (x,y,z) is getGrid(x,y,z).
